@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +40,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Claude Code per-machine config (launch.json points at this machine's nvm path)
+.claude/
+
+# Dev wrapper scripts that hardcode user-specific paths
+/scripts/dev.sh
+/scripts/deploy.sh
