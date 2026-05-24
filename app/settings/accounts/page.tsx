@@ -68,8 +68,8 @@ function AccountList({ title, accounts, onChanged }: { title: string; accounts: 
     await fetch(`/api/accounts/${id}`, { method: 'DELETE' });
     onChanged();
   };
-  const toggleCategory = async (a: Account) => {
-    const newCategory = a.category === 'personal' ? 'business' : 'personal';
+  const setCategory = async (a: Account, newCategory: 'personal' | 'business') => {
+    if (a.category === newCategory) return;
     await fetch(`/api/accounts/${a.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -91,12 +91,21 @@ function AccountList({ title, accounts, onChanged }: { title: string; accounts: 
                 {a.type}
               </div>
             </div>
-            <button
-              onClick={() => toggleCategory(a)}
-              className="text-[10px] uppercase tracking-[0.18em] text-white/40 hover:text-white/70"
-            >
-              → {a.category === 'personal' ? 'business' : 'personal'}
-            </button>
+            <div className="flex items-center rounded-md border border-white/10 bg-black/30 p-0.5">
+              {(['personal', 'business'] as const).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setCategory(a, c)}
+                  className={`rounded px-2 py-1 text-[10px] uppercase tracking-[0.18em] transition ${
+                    a.category === c
+                      ? 'bg-emerald-400/20 text-emerald-300'
+                      : 'text-white/40 hover:text-white/70'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
             <button
               onClick={() => remove(a.id)}
               className="text-white/20 opacity-0 transition group-hover:opacity-100 hover:text-red-400/80"
@@ -151,14 +160,24 @@ function NewAccountForm({ onCreated }: { onCreated: () => void }) {
           {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </div>
-      <div className="flex items-center gap-3 text-sm text-white/80">
+      <div className="flex items-center gap-2 text-sm text-white/80">
         <span className="text-[10px] uppercase tracking-[0.18em] text-white/40">Category:</span>
-        {(['personal', 'business'] as const).map((c) => (
-          <label key={c} className="flex items-center gap-1">
-            <input type="radio" checked={category === c} onChange={() => setCategory(c)} className="accent-emerald-400" />
-            {c}
-          </label>
-        ))}
+        <div className="flex items-center rounded-md border border-white/10 bg-black/30 p-0.5">
+          {(['personal', 'business'] as const).map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setCategory(c)}
+              className={`rounded px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] transition ${
+                category === c
+                  ? 'bg-emerald-400/20 text-emerald-300'
+                  : 'text-white/40 hover:text-white/70'
+              }`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
       </div>
       <button type="submit" disabled={!name.trim() || pending} className="w-full rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-2 text-xs font-medium text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40">
         {pending ? 'Adding…' : 'Add Account'}

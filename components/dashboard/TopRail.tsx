@@ -8,6 +8,7 @@ import { Avatar } from './Avatar';
 const TABS = [
   { href: '/', label: 'HOME' },
   { href: '/crm', label: 'CRM' },
+  { href: '/brain', label: 'BRAIN' },
   { href: '/finance', label: 'FINANCE' },
   { href: '/review', label: 'REVIEW' },
 ];
