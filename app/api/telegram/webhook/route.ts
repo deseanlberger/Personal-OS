@@ -6,14 +6,23 @@ import {
   downloadFile,
   answerCallbackQuery,
   editMessageReplyMarkup,
-  urgencyKeyboard,
+  taskKeyboard,
 } from '@/lib/telegram/api';
 import { transcribeAudio } from '@/lib/llm/whisper';
 import { estimateMacrosFromImage } from '@/lib/nutrition/estimator';
 import { localDateKey } from '@/lib/habits/date';
+import { recalcWeek } from '@/lib/blocks/recalc';
 
 const SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 const URGENCY_CHOICES = new Set(['today', 'this_week', 'this_month', 'someday']);
+const CATEGORY_CHOICES = new Set([
+  'deep-thinking',
+  'deep-admin',
+  'multitask-admin',
+  'meeting',
+  'personal',
+  'flex',
+]);
 
 type TelegramPhoto = { file_id: string; width: number; height: number; file_size?: number };
 
@@ -128,7 +137,9 @@ async function handleMessage(msg: NonNullable<TelegramUpdate['message']>): Promi
 
     await sendMessage(chatId, reply, {
       reply_to_message_id: msg.message_id,
-      reply_markup: result.routed_id ? urgencyKeyboard(result.routed_id) : undefined,
+      reply_markup: result.routed_id
+        ? taskKeyboard(result.routed_id, c.category)
+        : undefined,
     });
   } catch (err) {
     console.error('[telegram.handleMessage] capture failed:', err);
@@ -244,7 +255,7 @@ function jarvisReply(c: Classification, routedTo: 'tasks' | null): string {
     const slot = c.category ? `${c.category}` : 'general';
     const energy = c.energy ? ` · ${c.energy} energy` : '';
     const time = c.estimated_minutes ? ` · ~${c.estimated_minutes}m` : '';
-    return `*Logged, sir.* → tasks · ${urgencyHuman[c.urgency] || c.urgency}\n${c.summary}\n_${slot}${energy}${time}_${tagsLine}\n\nOverride urgency below if I misjudged.`;
+    return `*Logged, sir.* → tasks · ${urgencyHuman[c.urgency] || c.urgency}\n${c.summary}\n_${slot}${energy}${time}_${tagsLine}\n\nTap to adjust urgency or category if I misjudged.`;
   }
 
   // For non-task captures (notes, journals, decisions)
@@ -259,26 +270,51 @@ function jarvisReply(c: Classification, routedTo: 'tasks' | null): string {
 
 async function handleCallback(cb: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
   const data = cb.data || '';
-  const parts = data.split(':'); // urgency:<task_id>:<choice>
-  if (parts[0] !== 'urgency' || parts.length !== 3) {
+  const parts = data.split(':'); // <kind>:<task_id>:<choice>
+  if (parts.length !== 3) {
     await answerCallbackQuery(cb.id);
     return;
   }
-  const [, taskId, choice] = parts;
+  const [kind, taskId, choice] = parts;
 
-  if (choice === 'key') {
-    await supabase.from('tasks').update({ key: true }).eq('id', taskId);
-    await answerCallbackQuery(cb.id, '★ Marked key');
-  } else if (URGENCY_CHOICES.has(choice)) {
-    await supabase.from('tasks').update({ urgency: choice }).eq('id', taskId);
-    await answerCallbackQuery(cb.id, `→ ${choice.replace('_', ' ')}`);
-  } else {
-    await answerCallbackQuery(cb.id);
+  if (kind === 'urgency') {
+    if (choice === 'key') {
+      await supabase.from('tasks').update({ key: true }).eq('id', taskId);
+      await answerCallbackQuery(cb.id, '★ Marked key');
+    } else if (URGENCY_CHOICES.has(choice)) {
+      await supabase.from('tasks').update({ urgency: choice }).eq('id', taskId);
+      await answerCallbackQuery(cb.id, `→ ${choice.replace('_', ' ')}`);
+    } else {
+      await answerCallbackQuery(cb.id);
+    }
+    // Urgency taps don't change the visual keyboard — leave it in place so Desean
+    // can still tap a category afterwards.
     return;
   }
 
-  // Remove the inline keyboard so the message doesn't get tapped twice
-  if (cb.message) {
-    await editMessageReplyMarkup(cb.message.chat.id, cb.message.message_id, null);
+  if (kind === 'category') {
+    if (!CATEGORY_CHOICES.has(choice)) {
+      await answerCallbackQuery(cb.id);
+      return;
+    }
+    await supabase.from('tasks').update({ category: choice }).eq('id', taskId);
+    await answerCallbackQuery(cb.id, `→ ${choice}`);
+
+    // Rebuild the keyboard with the new ✓ marker so the user sees the change reflected.
+    if (cb.message) {
+      await editMessageReplyMarkup(
+        cb.message.chat.id,
+        cb.message.message_id,
+        taskKeyboard(taskId, choice),
+      );
+    }
+
+    // Fire-and-forget: re-run the block engine so the task moves to a matching slot.
+    recalcWeek().catch((err) => {
+      console.error('[telegram.callback] recalc after category change failed:', err.message);
+    });
+    return;
   }
+
+  await answerCallbackQuery(cb.id);
 }
