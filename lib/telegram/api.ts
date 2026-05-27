@@ -66,6 +66,36 @@ export async function downloadFile(fileId: string): Promise<{ bytes: ArrayBuffer
 }
 
 export type UrgencyChoice = 'today' | 'this_week' | 'this_month' | 'someday' | 'key';
+export type CategoryChoice = 'deep-thinking' | 'deep-admin' | 'multitask-admin' | 'meeting' | 'personal' | 'flex';
+
+const CATEGORY_LABELS: Record<CategoryChoice, string> = {
+  'deep-thinking': 'Think',
+  'deep-admin': 'Admin',
+  'multitask-admin': 'Multi',
+  'meeting': 'Meet',
+  'personal': 'Personal',
+  'flex': 'Flex',
+};
+
+/** Inline keyboard with urgency overrides + category overrides for a captured task. */
+export function taskKeyboard(taskId: string, currentCategory: string | null): Record<string, unknown> {
+  const urg = (label: string, choice: UrgencyChoice) => ({
+    text: label,
+    callback_data: `urgency:${taskId}:${choice}`,
+  });
+  const cat = (choice: CategoryChoice) => ({
+    text: currentCategory === choice ? `✓ ${CATEGORY_LABELS[choice]}` : CATEGORY_LABELS[choice],
+    callback_data: `category:${taskId}:${choice}`,
+  });
+  return {
+    inline_keyboard: [
+      [urg('Today', 'today'), urg('Week', 'this_week')],
+      [urg('Month', 'this_month'), urg('Someday', 'someday'), urg('★ Key', 'key')],
+      [cat('deep-thinking'), cat('deep-admin'), cat('multitask-admin')],
+      [cat('meeting'), cat('personal'), cat('flex')],
+    ],
+  };
+}
 
 /** Inline keyboard for urgency override after a capture. */
 export function urgencyKeyboard(taskId: string): Record<string, unknown> {
