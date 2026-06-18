@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase/server';
+import { classifyCapture } from '@/lib/router/classifyCapture';
+import { embed } from '@/lib/embeddings';
+import { recalcWeek } from '@/lib/blocks/recalc';
 import type { Urgency } from '@/lib/types';
 
 const URGENCIES: Urgency[] = ['today', 'this_week', 'this_month', 'someday'];
+const USER_ID = process.env.USER_ID || 'desean';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -38,22 +42,69 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body?.title) return NextResponse.json({ error: 'title required' }, { status: 400 });
+
+  const title = String(body.title).trim();
+
+  // If the client didn't specify a category, ask the classifier to fill in
+  // category/energy/estimated_minutes from the title. Title-only is enough
+  // context for short tasks; falls back gracefully when the LLM is offline.
+  let category: string | null = body.category || null;
+  let energy: string | null = body.energy || null;
+  let estimatedMinutes: number | null = body.estimated_minutes || null;
+  let inferredTags: string[] = Array.isArray(body.tags) ? body.tags : [];
+
+  if (!category) {
+    try {
+      const { classification } = await classifyCapture(title);
+      category = classification.category;
+      energy = energy || classification.energy;
+      estimatedMinutes = estimatedMinutes || classification.estimated_minutes;
+      if (inferredTags.length === 0 && classification.tags.length > 0) {
+        inferredTags = classification.tags;
+      }
+    } catch (err) {
+      console.error('[/api/tasks POST] auto-classify failed:', (err as Error).message);
+    }
+  }
+
   const { data, error } = await supabase
     .from('tasks')
     .insert({
-      user_id: process.env.USER_ID || 'desean',
-      title: body.title,
+      user_id: USER_ID,
+      title,
       description: body.description || null,
       urgency: URGENCIES.includes(body.urgency) ? body.urgency : 'someday',
       key: !!body.key,
-      category: body.category || null,
-      energy: body.energy || null,
-      estimated_minutes: body.estimated_minutes || null,
-      tags: Array.isArray(body.tags) ? body.tags : [],
+      category,
+      energy,
+      estimated_minutes: estimatedMinutes,
+      tags: inferredTags,
       due_date: body.due_date || null,
     })
     .select('*')
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Best-effort: embed the task text so it shows up in /brain search.
+  if (data?.id) {
+    embed(title)
+      .then(async (vec) => {
+        if (!vec) return;
+        await supabase.from('memory_chunks').insert({
+          user_id: USER_ID,
+          source_type: 'task',
+          source_id: data.id,
+          text: title,
+          embedding: vec as unknown as string,
+        });
+      })
+      .catch((err: Error) => console.error('[/api/tasks POST] embed failed:', err.message));
+  }
+
+  // Auto-recalc if this task is slottable so it lands in a matching block.
+  if (category && category !== 'meeting' && category !== 'personal') {
+    recalcWeek().catch((err) => console.error('[/api/tasks POST] recalc failed:', err.message));
+  }
+
   return NextResponse.json({ task: data });
 }
