@@ -34,16 +34,18 @@ export async function GET(req: NextRequest) {
   const targetMonday = new Date(baseMonday);
   targetMonday.setDate(baseMonday.getDate() + weekOffset * 7);
 
-  // Assignments only meaningful for the current week
-  const showAssignments = weekOffset === 0;
+  // Show current-week assignments (weekOffset 0) and next-week overflow (weekOffset 1).
+  // Past or further-future weeks show no assignments.
+  const showAssignments = weekOffset === 0 || weekOffset === 1;
   const byBlock = new Map<string, Partial<Task>[]>();
 
   if (showAssignments) {
     const { data: tasks, error } = await supabase
       .from('tasks')
-      .select('id,title,category,energy,estimated_minutes,is_pinned,key,assigned_block_id,momentum_score')
+      .select('id,title,category,energy,estimated_minutes,is_pinned,key,assigned_block_id,assigned_week_offset,momentum_score')
       .eq('user_id', USER_ID)
       .is('completed_at', null)
+      .eq('assigned_week_offset', weekOffset)
       .not('assigned_block_id', 'is', null);
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

@@ -8,6 +8,7 @@ import { HabitTracker } from '@/components/dashboard/HabitTracker';
 import { Avatar } from '@/components/dashboard/Avatar';
 import { NutritionCard } from '@/components/dashboard/NutritionCard';
 import { GoalsCard } from '@/components/dashboard/GoalsCard';
+import { SlippingCard } from '@/components/dashboard/SlippingCard';
 
 export default function HomePage() {
   return (
@@ -108,6 +109,8 @@ export default function HomePage() {
           <Panel id="09" title="Goals" meta="PERSISTENT">
             <GoalsCard />
           </Panel>
+
+          <SlippingCard />
         </div>
       </div>
     </Shell>

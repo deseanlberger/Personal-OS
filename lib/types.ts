@@ -16,6 +16,7 @@ export type Task = {
   is_pinned: boolean;
   momentum_score: number;
   assigned_block_id: string | null;
+  assigned_week_offset: number;
   tags: string[];
   due_date: string | null;
   owner: string | null;
