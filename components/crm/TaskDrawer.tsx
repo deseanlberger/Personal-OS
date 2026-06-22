@@ -65,7 +65,7 @@ export function TaskDrawer({
         className="flex-1 bg-black/60 backdrop-blur-sm"
         aria-label="Close drawer"
       />
-      <div className="flex w-full max-w-md flex-col gap-4 overflow-y-auto border-l border-white/10 bg-[color:var(--ink-0)] p-6">
+      <div className="flex w-full flex-col gap-4 overflow-y-auto border-l border-white/10 bg-[color:var(--ink-0)] p-4 sm:max-w-md sm:p-6">
         <div className="flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Edit task</div>
           <button onClick={onClose} className="text-white/50 hover:text-white/80">✕</button>
