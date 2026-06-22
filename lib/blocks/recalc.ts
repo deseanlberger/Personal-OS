@@ -106,6 +106,7 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
 
   const slotsCurrent = buildSlots(currentBlocks, 0);
   const slotsNext = buildSlots(nextBlocks, 1);
+  const todayDow = now.getDay();
 
   const assignments: Assignment[] = [];
   const overflow: Assignment[] = [];
@@ -117,26 +118,48 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
       continue;
     }
 
-    // Try current week first
-    let matchIdx = slotsCurrent.findIndex(
-      (s) => slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN,
-    );
+    let matchIdx = -1;
     let slotArr = slotsCurrent;
     let weekOffset = 0;
 
-    // urgency='today' fallback: if no category-match today, take any flex/open
-    // slot in the current week so the task lands SOMEWHERE today/this-week
-    // rather than getting punted to next week.
-    if (matchIdx === -1 && t.urgency === 'today') {
-      matchIdx = slotsCurrent.findIndex((s) => s.remainingMin >= REMAINDER_MIN);
+    // urgency='today' MUST land today. Priority order:
+    //   1. category-matching slot today
+    //   2. any open slot today (ignore category match)
+    //   3. category-matching slot anywhere this week
+    //   4. category-matching slot next week
+    //   5. any open slot this week
+    if (t.urgency === 'today') {
+      matchIdx = slotsCurrent.findIndex(
+        (s) => s.block.day === todayDow && slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN,
+      );
+      if (matchIdx === -1) {
+        matchIdx = slotsCurrent.findIndex(
+          (s) => s.block.day === todayDow && s.remainingMin >= REMAINDER_MIN,
+        );
+      }
     }
 
+    // Category-matching slot anywhere this week
+    if (matchIdx === -1) {
+      matchIdx = slotsCurrent.findIndex(
+        (s) => slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN,
+      );
+    }
+
+    // Category-matching slot next week
     if (matchIdx === -1) {
       matchIdx = slotsNext.findIndex(
         (s) => slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN,
       );
       slotArr = slotsNext;
       weekOffset = 1;
+    }
+
+    // Final fallback for urgency='today': any current-week slot
+    if (matchIdx === -1 && t.urgency === 'today') {
+      matchIdx = slotsCurrent.findIndex((s) => s.remainingMin >= REMAINDER_MIN);
+      slotArr = slotsCurrent;
+      weekOffset = 0;
     }
 
     if (matchIdx === -1) {
