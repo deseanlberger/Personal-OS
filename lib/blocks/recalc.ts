@@ -85,7 +85,16 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
   if (error) throw new Error(`recalcWeek: tasks fetch failed: ${error.message}`);
 
   const tasks = (openTasks || []) as Task[];
-  tasks.sort((a, b) => computeMomentum(b) - computeMomentum(a));
+  // Sort by urgency first (today > this_week > this_month > someday), then
+  // momentum within each urgency band. So today-urgency tasks always get
+  // first crack at today's remaining slots.
+  const URGENCY_RANK: Record<string, number> = { today: 4, this_week: 3, this_month: 2, someday: 1 };
+  tasks.sort((a, b) => {
+    const ua = URGENCY_RANK[a.urgency || 'someday'] || 0;
+    const ub = URGENCY_RANK[b.urgency || 'someday'] || 0;
+    if (ub !== ua) return ub - ua;
+    return computeMomentum(b) - computeMomentum(a);
+  });
 
   // Clear previous assignments (both week offsets)
   if (tasks.length > 0) {
@@ -114,6 +123,13 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
     );
     let slotArr = slotsCurrent;
     let weekOffset = 0;
+
+    // urgency='today' fallback: if no category-match today, take any flex/open
+    // slot in the current week so the task lands SOMEWHERE today/this-week
+    // rather than getting punted to next week.
+    if (matchIdx === -1 && t.urgency === 'today') {
+      matchIdx = slotsCurrent.findIndex((s) => s.remainingMin >= REMAINDER_MIN);
+    }
 
     if (matchIdx === -1) {
       matchIdx = slotsNext.findIndex(
