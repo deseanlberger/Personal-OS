@@ -9,6 +9,7 @@ import { Avatar } from '@/components/dashboard/Avatar';
 import { NutritionCard } from '@/components/dashboard/NutritionCard';
 import { GoalsCard } from '@/components/dashboard/GoalsCard';
 import { SlippingCard } from '@/components/dashboard/SlippingCard';
+import { JarvisVoice } from '@/components/dashboard/JarvisVoice';
 
 export default function HomePage() {
   return (
@@ -111,6 +112,8 @@ export default function HomePage() {
           </Panel>
 
           <SlippingCard />
+
+          <JarvisVoice />
         </div>
       </div>
     </Shell>
