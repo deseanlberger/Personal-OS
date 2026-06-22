@@ -45,6 +45,45 @@ function safeJson(text: string): unknown {
   }
 }
 
+/**
+ * Quick vision classifier — decides whether a Telegram photo is a receipt
+ * or a meal so the webhook can route to the right parser. Uses gpt-4o-mini
+ * for a single cheap call.
+ */
+export async function classifyPhotoKind(
+  imageBase64DataUri: string,
+): Promise<'receipt' | 'food' | 'other'> {
+  if (!openaiAvailable()) return 'food';
+  try {
+    const res = await openaiClient().chat.completions.create({
+      model: 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You classify a photo into one of three kinds: "receipt" (a printed bill, invoice, or paper receipt from a store), "food" (a meal, plate, or food item), or "other" (anything else). Output JSON ONLY: {"kind":"receipt"|"food"|"other"}.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Classify this photo.' },
+            { type: 'image_url', image_url: { url: imageBase64DataUri, detail: 'low' } },
+          ],
+        },
+      ],
+    });
+    const content = res.choices[0]?.message?.content || '{}';
+    const parsed = safeJson(content) as { kind?: string } | null;
+    const k = parsed?.kind;
+    if (k === 'receipt' || k === 'food' || k === 'other') return k;
+    return 'other';
+  } catch (err) {
+    console.error('[classifyPhotoKind] failed:', (err as Error).message);
+    return 'other';
+  }
+}
+
 export async function parseReceiptFromImage(imageBase64DataUri: string): Promise<ParsedReceipt | null> {
   if (!openaiAvailable()) return null;
   try {

@@ -12,44 +12,69 @@ const LOCKED_TYPES = new Set(['coaching', 'personal']);
 const TASK_HARD_CAP_MIN = 45;
 const REMAINDER_MIN = 15;
 
+export type Assignment = {
+  taskId: string;
+  title: string;
+  blockId: string;
+  minutes: number;
+  weekOffset: number;
+};
+
 export type RecalcResult = {
   weekLabel: WeekLabel;
   totalOpenTasks: number;
   assignedCount: number;
+  overflowCount: number;
   skippedCount: number;
   oneThing: { taskId: string; title: string; blockId: string } | null;
-  assignments: { taskId: string; title: string; blockId: string; minutes: number }[];
+  assignments: Assignment[];
+  overflow: Assignment[];
   skipped: { taskId: string; title: string; reason: string }[];
 };
 
+type BlockSlot = { block: BlockTemplate; id: string; remainingMin: number; weekOffset: number };
+
+function buildSlots(blocks: BlockTemplate[], weekOffset: number): BlockSlot[] {
+  return blocks
+    .filter((b) => !LOCKED_TYPES.has(b.type) && !b.locked)
+    .map((b) => ({ block: b, id: blockId(b), remainingMin: blockMinutes(b), weekOffset }));
+}
+
+function slotMatches(slot: BlockSlot, taskCategory: string | null): boolean {
+  if (!taskCategory) return false;
+  if (slot.block.type === 'flex') return taskCategory === 'deep-thinking' || taskCategory === 'deep-admin';
+  return slot.block.type === taskCategory;
+}
+
 /**
- * Reassign all open tasks to blocks for the current week.
+ * Reassign all open tasks to blocks across this week + next week.
  *
- * Strategy (ported from command-center):
- *   1. Pull all open tasks (completed_at IS NULL).
- *   2. Sort by momentum score, descending.
- *   3. For each task, find the earliest block whose type matches task.category
- *      (or is flex AND task.category is deep-thinking/deep-admin).
- *   4. "Assign" by setting tasks.assigned_block_id = blockId.
- *      Block capacity = blockMinutes(b), capped at TASK_HARD_CAP_MIN per task.
- *   5. Multiple tasks can share a block if remaining minutes >= REMAINDER_MIN.
- *   6. ⭐ "One Thing": highest-momentum task in a HIGH-energy block gets is_pinned=true.
+ * Two-pass strategy:
+ *   - Pass 1: try the current week's REMAINING blocks (skips past blocks).
+ *   - Pass 2: any task that couldn't fit overflows into next week's blocks.
  *
- * Skips meeting/personal/coaching blocks entirely (locked).
+ * Tasks store both assigned_block_id and assigned_week_offset (0 = current,
+ * 1 = next) so the calendar view can render each week's assignments.
  */
 export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
-  const weekLabel = label || (await getWeekLabel());
-  const allBlocks = await blocksForWeekFromDb(weekLabel);
+  const currentLabel = label || (await getWeekLabel());
+  const nextLabel: WeekLabel = currentLabel === 'A' ? 'B' : 'A';
 
-  // Skip blocks whose start time has already passed — tasks should only be
-  // scheduled into UPCOMING blocks, not past ones (otherwise they sit invisible
-  // on a past day of the current week).
+  const [currentAll, nextAll] = await Promise.all([
+    blocksForWeekFromDb(currentLabel),
+    blocksForWeekFromDb(nextLabel),
+  ]);
+
   const now = new Date();
   const weekStart = mondayOfWeek(now);
-  const blocks = allBlocks.filter((b) => {
+
+  // Current week: only blocks whose start time is still in the future.
+  const currentBlocks = currentAll.filter((b) => {
     const { start } = blockDates(b, weekStart);
     return start.getTime() > now.getTime();
   });
+  // Next week: every block is future.
+  const nextBlocks = nextAll;
 
   // 1. Pull open tasks
   const { data: openTasks, error } = await supabase
@@ -59,33 +84,22 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
     .is('completed_at', null);
   if (error) throw new Error(`recalcWeek: tasks fetch failed: ${error.message}`);
 
-  // 2. Sort by momentum desc
   const tasks = (openTasks || []) as Task[];
   tasks.sort((a, b) => computeMomentum(b) - computeMomentum(a));
 
-  // 3. Build per-block remaining-minutes map for task-eligible blocks
-  type BlockSlot = { block: BlockTemplate; id: string; remainingMin: number };
-  const slots: BlockSlot[] = blocks
-    .filter((b) => !LOCKED_TYPES.has(b.type) && !b.locked)
-    .map((b) => ({ block: b, id: blockId(b), remainingMin: blockMinutes(b) }));
-
-  // Index slots by usable type (a flex slot is usable for deep-thinking AND deep-admin)
-  function slotMatches(slot: BlockSlot, taskCategory: string | null): boolean {
-    if (!taskCategory) return false;
-    if (slot.block.type === 'flex') return taskCategory === 'deep-thinking' || taskCategory === 'deep-admin';
-    return slot.block.type === taskCategory;
-  }
-
-  // 4. Greedy assignment + clear all previous assignments first
-  const clearIds = tasks.map((t) => t.id);
-  if (clearIds.length > 0) {
+  // Clear previous assignments (both week offsets)
+  if (tasks.length > 0) {
     await supabase
       .from('tasks')
-      .update({ assigned_block_id: null })
-      .in('id', clearIds);
+      .update({ assigned_block_id: null, assigned_week_offset: 0 })
+      .in('id', tasks.map((t) => t.id));
   }
 
-  const assignments: RecalcResult['assignments'] = [];
+  const slotsCurrent = buildSlots(currentBlocks, 0);
+  const slotsNext = buildSlots(nextBlocks, 1);
+
+  const assignments: Assignment[] = [];
+  const overflow: Assignment[] = [];
   const skipped: RecalcResult['skipped'] = [];
 
   for (const t of tasks) {
@@ -93,53 +107,80 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
       skipped.push({ taskId: t.id, title: t.title, reason: `${t.category || 'no category'} not slottable` });
       continue;
     }
-    const matchIdx = slots.findIndex((s) => slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN);
+
+    // Try current week first
+    let matchIdx = slotsCurrent.findIndex(
+      (s) => slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN,
+    );
+    let slotArr = slotsCurrent;
+    let weekOffset = 0;
+
     if (matchIdx === -1) {
-      skipped.push({ taskId: t.id, title: t.title, reason: 'no matching open block this week' });
+      matchIdx = slotsNext.findIndex(
+        (s) => slotMatches(s, t.category) && s.remainingMin >= REMAINDER_MIN,
+      );
+      slotArr = slotsNext;
+      weekOffset = 1;
+    }
+
+    if (matchIdx === -1) {
+      skipped.push({ taskId: t.id, title: t.title, reason: 'no matching block this week or next' });
       continue;
     }
-    const slot = slots[matchIdx];
+
+    const slot = slotArr[matchIdx];
     const desired = t.estimated_minutes ?? 45;
     const taskMin = Math.min(desired, TASK_HARD_CAP_MIN, slot.remainingMin);
 
     await supabase
       .from('tasks')
-      .update({ assigned_block_id: slot.id, momentum_score: computeMomentum(t) })
+      .update({
+        assigned_block_id: slot.id,
+        assigned_week_offset: weekOffset,
+        momentum_score: computeMomentum(t),
+      })
       .eq('id', t.id);
 
-    assignments.push({ taskId: t.id, title: t.title, blockId: slot.id, minutes: taskMin });
+    const entry: Assignment = {
+      taskId: t.id,
+      title: t.title,
+      blockId: slot.id,
+      minutes: taskMin,
+      weekOffset,
+    };
+    if (weekOffset === 0) assignments.push(entry);
+    else overflow.push(entry);
 
-    // Reduce slot capacity by task minutes + 10-min break
     slot.remainingMin -= taskMin + 10;
     if (slot.remainingMin < REMAINDER_MIN) {
-      slots.splice(matchIdx, 1);
+      slotArr.splice(matchIdx, 1);
     }
   }
 
-  // 5. One Thing: highest-momentum assigned task in a HIGH-energy block → is_pinned
-  // First, clear any prior pin
+  // 2. One Thing: highest-momentum task in a HIGH-energy current-week block → is_pinned
   await supabase.from('tasks').update({ is_pinned: false }).eq('user_id', USER_ID).eq('is_pinned', true);
 
   let oneThing: RecalcResult['oneThing'] = null;
   const candidates = assignments.filter((a) => {
-    const slot = blocks.find((b) => blockId(b) === a.blockId);
+    const slot = currentBlocks.find((b) => blockId(b) === a.blockId);
     return slot?.energy === 'high';
   });
   const pool = candidates.length > 0 ? candidates : assignments;
   if (pool.length > 0) {
-    // Already sorted by momentum desc since we processed tasks in that order.
     const winner = pool[0];
     await supabase.from('tasks').update({ is_pinned: true }).eq('id', winner.taskId);
     oneThing = { taskId: winner.taskId, title: winner.title, blockId: winner.blockId };
   }
 
   return {
-    weekLabel,
+    weekLabel: currentLabel,
     totalOpenTasks: tasks.length,
     assignedCount: assignments.length,
+    overflowCount: overflow.length,
     skippedCount: skipped.length,
     oneThing,
     assignments,
+    overflow,
     skipped,
   };
 }
