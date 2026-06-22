@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase/server';
 import { claudeClient, claudeModel, claudeAvailable } from '@/lib/llm/claude';
 import { blocksForWeekFromDb } from '@/lib/blocks/templateStore';
 import { getWeekLabel } from '@/lib/app_meta';
-import { localDateKey } from '@/lib/habits/date';
+import { localDateKey, localClock, USER_TIMEZONE } from '@/lib/habits/date';
 
 const USER_ID = process.env.USER_ID || 'desean';
 
@@ -22,9 +22,9 @@ type DailyLogNotes = {
 export async function GET() {
   const now = new Date();
   const today = localDateKey();
-  const hour = now.getHours();
+  const { hour, minute, dayOfWeek } = localClock(now);
   const greeting =
-    hour < 5 ? 'You are up early, sir' :
+    hour < 5 ? 'Burning the midnight oil, sir' :
     hour < 12 ? 'Good morning, sir' :
     hour < 17 ? 'Good afternoon, sir' :
     hour < 21 ? 'Good evening, sir' :
@@ -33,12 +33,11 @@ export async function GET() {
   // Pull today's blocks
   const weekLabel = await getWeekLabel();
   const allBlocks = await blocksForWeekFromDb(weekLabel);
-  const todayDayOfWeek = now.getDay();
   const todayBlocks = allBlocks
-    .filter((b) => b.day === todayDayOfWeek)
+    .filter((b) => b.day === dayOfWeek)
     .sort((a, b) => a.start.localeCompare(b.start));
 
-  const nowMin = hour * 60 + now.getMinutes();
+  const nowMin = hour * 60 + minute;
   let currentBlock: typeof todayBlocks[number] | null = null;
   let nextBlock: typeof todayBlocks[number] | null = null;
   for (const b of todayBlocks) {
@@ -92,7 +91,7 @@ export async function GET() {
 
   // Compose facts for Claude
   const facts = [
-    `Time: ${now.toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`,
+    `Time: ${now.toLocaleString('en-US', { timeZone: USER_TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`,
     `Open tasks: ${totalOpen}`,
     `Tasks marked today: ${todayTasks.length}`,
     oneThing ? `One Thing: ${oneThing.title}` : null,
