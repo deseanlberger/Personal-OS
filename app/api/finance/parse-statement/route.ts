@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { claudeClient, claudeModel, claudeAvailable } from '@/lib/llm/claude';
+import { supabase } from '@/lib/supabase/server';
 import { z } from 'zod';
+
+const USER_ID = process.env.USER_ID || 'desean';
 
 export const maxDuration = 60;
 
@@ -95,6 +98,24 @@ export async function POST(req: NextRequest) {
 
   const base64Pdf = buffer.toString('base64');
 
+  // Pull the user's configured accounts so the prompt knows which cards are
+  // business vs personal. Falls back to the hardcoded last-4 hints in the
+  // prompt if the lookup fails.
+  let accountsHint = '';
+  try {
+    const { data: accounts } = await supabase
+      .from('accounts')
+      .select('name, short_name, last_4, type, category')
+      .eq('user_id', USER_ID);
+    if (accounts && accounts.length > 0) {
+      accountsHint = '\n\nUSER\'S CONFIGURED ACCOUNTS (use these to set is_business default):\n' +
+        accounts.map((a) => `- ${a.short_name || a.name}${a.last_4 ? ` (····${a.last_4})` : ''} · ${a.type} · ${a.category.toUpperCase()}`).join('\n') +
+        '\n\nIf the statement\'s account matches one of these, default is_business from the account category. Override per-row only when the vendor strongly disagrees.';
+    }
+  } catch {
+    // best effort
+  }
+
   try {
     const msg = await claudeClient().messages.create({
       model: claudeModel(),
@@ -108,7 +129,7 @@ export async function POST(req: NextRequest) {
               type: 'document',
               source: { type: 'base64', media_type: 'application/pdf', data: base64Pdf },
             },
-            { type: 'text', text: EXTRACTION_PROMPT },
+            { type: 'text', text: EXTRACTION_PROMPT + accountsHint },
           ],
         },
       ],

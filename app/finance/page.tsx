@@ -56,6 +56,19 @@ type StatementParseResult = {
   transactions: ParsedStatementTxn[];
 };
 
+// Defensive date formatter — Safari/iOS throws "The string did not match the
+// expected pattern" if you call toLocaleDateString on an invalid Date. Most
+// txn_date values are YYYY-MM-DD, but bulk-imported rows can occasionally
+// contain ISO timestamps or other surprises; fall back to the raw value.
+function formatTxnDate(value: string | null | undefined): string {
+  if (!value || typeof value !== 'string') return '';
+  const datePart = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return value;
+  const d = new Date(datePart + 'T00:00:00');
+  if (isNaN(d.getTime())) return value;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 const CATEGORY_TONE: Record<string, string> = {
   food: 'border-amber-300/30 bg-amber-300/10 text-amber-300',
   gas: 'border-orange-400/30 bg-orange-400/10 text-orange-300',
@@ -405,7 +418,7 @@ export default function FinancePage() {
                   className="group flex items-center gap-2 border-b border-white/[0.04] px-3 py-3 last:border-0 hover:bg-white/[0.02] sm:gap-3 sm:px-4"
                 >
                   <div className="num shrink-0 text-[10px] text-white/40 sm:text-[11px]">
-                    {new Date(t.txn_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {formatTxnDate(t.txn_date)}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2">

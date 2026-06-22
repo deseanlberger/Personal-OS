@@ -384,8 +384,68 @@ export function FinanceDashboard({
 
       <SavingsTracker tracker={data.savings_tracker} />
       <BudgetSection budgets={data.budgets} />
+      {(scope === 'business' || scope === 'all') && <MileageCard />}
       <InsightsSection />
     </section>
+  );
+}
+
+function MileageCard() {
+  const [data, setData] = useState<{
+    totals: { business_miles: number; personal_miles: number; total_miles: number; business_deduction_estimate: number };
+    logs: { trip_date: string; from_address: string | null; to_address: string | null; miles: number; is_business: boolean; purpose: string | null }[];
+  } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/finance/mileage?days=180', { cache: 'no-store' })
+      .then(async (r) => {
+        if (!r.ok) {
+          setErr(`${r.status}`);
+          return;
+        }
+        setData(await r.json());
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  if (err) return null;
+  if (!data) {
+    return (
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-[12px] text-white/40">
+        Mileage loading…
+      </div>
+    );
+  }
+  const { business_miles, personal_miles, business_deduction_estimate } = data.totals;
+  if (business_miles === 0 && personal_miles === 0) {
+    return (
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Mileage tracker</div>
+        <div className="mt-2 text-[12px] text-white/40">
+          No trips logged yet. Run the iOS Shortcut <em>Log Trip Mileage</em> after a drive to start tracking. Business miles count toward your 2026 IRS deduction at $0.67/mi.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/[0.06] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/85">Business miles</div>
+        <div className="num mt-1 text-2xl text-emerald-300">{business_miles.toFixed(1)}</div>
+        <div className="num mt-0.5 text-[10px] text-white/40">last 180 days</div>
+      </div>
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Personal miles</div>
+        <div className="num mt-1 text-2xl text-white/85">{personal_miles.toFixed(1)}</div>
+        <div className="num mt-0.5 text-[10px] text-white/30">last 180 days</div>
+      </div>
+      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/[0.06] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/85">Tax deduction est.</div>
+        <div className="num mt-1 text-2xl text-emerald-300">{fmtMoney(business_deduction_estimate)}</div>
+        <div className="num mt-0.5 text-[10px] text-white/40">@ $0.67/mi · 2026 IRS rate</div>
+      </div>
+    </div>
   );
 }
 
