@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Shell } from '@/components/dashboard/Shell';
-import { FinanceDashboard } from '@/components/dashboard/FinanceDashboard';
+import { FinanceDashboard, type FinanceScope } from '@/components/dashboard/FinanceDashboard';
 
 type Account = {
   id: string;
@@ -60,6 +60,7 @@ export default function FinancePage() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [pendingParse, setPendingParse] = useState<ParsedReceipt | null>(null);
+  const [scope, setScope] = useState<FinanceScope>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAll = useCallback(async () => {
@@ -217,8 +218,29 @@ export default function FinancePage() {
           </div>
         )}
 
+        {/* Personal / Business / All scope toggle */}
+        <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1">
+          {(['all', 'personal', 'business'] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setScope(s)}
+              className={`flex-1 rounded-md px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] transition ${
+                scope === s
+                  ? s === 'business'
+                    ? 'bg-emerald-400/20 text-emerald-300'
+                    : s === 'personal'
+                      ? 'bg-sky-400/20 text-sky-300'
+                      : 'bg-white/10 text-white/85'
+                  : 'text-white/40 hover:text-white/70'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
         {/* KJ-inspired dashboard: monthly tabs / 4 cards / donut / transfers / month-over-month / subscriptions */}
-        <FinanceDashboard refreshKey={transactions.length} />
+        <FinanceDashboard refreshKey={transactions.length} scope={scope} />
 
         {/* Pending parsed receipt */}
         {pendingParse && (
@@ -241,16 +263,25 @@ export default function FinancePage() {
         {/* Pending review */}
         <PendingReviewSection accounts={accounts} onChange={fetchAll} />
 
-        {/* Transaction list */}
+        {/* Transaction list — filtered by scope */}
+        {(() => {
+          const scoped = scope === 'all'
+            ? transactions
+            : transactions.filter((t) => (scope === 'business' ? t.is_business : !t.is_business));
+          return (
         <section>
-          <h2 className="mb-2 text-[10px] uppercase tracking-[0.18em] text-white/50">Transactions</h2>
+          <h2 className="mb-2 text-[10px] uppercase tracking-[0.18em] text-white/50">
+            Transactions{scope !== 'all' ? ` · ${scope}` : ''}
+          </h2>
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02]">
-            {transactions.length === 0 && (
+            {scoped.length === 0 && (
               <p className="px-4 py-6 text-sm text-white/40">
-                No transactions yet. Tap 📷 Snap Receipt to log your first one.
+                {transactions.length === 0
+                  ? 'No transactions yet. Tap 📷 Snap Receipt to log your first one.'
+                  : `No ${scope} transactions in this window.`}
               </p>
             )}
-            {transactions.map((t) => {
+            {scoped.map((t) => {
               const tone = (t.category && CATEGORY_TONE[t.category]) || CATEGORY_TONE.other;
               return (
                 <div
@@ -315,6 +346,8 @@ export default function FinancePage() {
             })}
           </div>
         </section>
+          );
+        })()}
       </div>
     </Shell>
   );

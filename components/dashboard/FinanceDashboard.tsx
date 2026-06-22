@@ -118,14 +118,22 @@ function donutPath(centerX: number, centerY: number, outerR: number, innerR: num
   ].join(' ');
 }
 
-export function FinanceDashboard({ refreshKey }: { refreshKey?: number }) {
+export type FinanceScope = 'all' | 'personal' | 'business';
+
+export function FinanceDashboard({
+  refreshKey,
+  scope = 'all',
+}: {
+  refreshKey?: number;
+  scope?: FinanceScope;
+}) {
   const [data, setData] = useState<Summary | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const res = await fetch('/api/finance/summary?months=12', { cache: 'no-store' });
+      const res = await fetch(`/api/finance/summary?months=12&scope=${scope}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`summary ${res.status}`);
       const body = (await res.json()) as Summary;
       setData(body);
@@ -134,7 +142,7 @@ export function FinanceDashboard({ refreshKey }: { refreshKey?: number }) {
     } catch (e) {
       setErr((e as Error).message);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     fetchAll();
