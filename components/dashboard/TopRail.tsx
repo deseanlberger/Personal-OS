@@ -37,6 +37,7 @@ function formatDate(d: Date) {
 export function TopRail() {
   const pathname = usePathname();
   const [now, setNow] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     setNow(new Date());
@@ -44,10 +45,38 @@ export function TopRail() {
     return () => clearInterval(t);
   }, []);
 
+  const refreshPage = () => {
+    setRefreshing(true);
+    if (typeof window !== 'undefined') window.location.reload();
+  };
+
   return (
     <header className="flex items-center justify-between border-b border-white/[0.06] px-6 py-3">
       <div className="flex items-center gap-2 font-mono text-xs">
-        <span className="size-1.5 rounded-full bg-emerald-400" />
+        <button
+          onClick={refreshPage}
+          disabled={refreshing}
+          aria-label="Refresh page"
+          title="Refresh entire page (PWA-friendly)"
+          className="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-white/10 text-white/50 transition hover:bg-white/[0.04] hover:text-white disabled:opacity-40"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={refreshing ? 'animate-spin' : ''}
+          >
+            <polyline points="23 4 23 10 17 10" />
+            <polyline points="1 20 1 14 7 14" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+          </svg>
+        </button>
+        <span className="ml-1 size-1.5 rounded-full bg-emerald-400" />
         <span className="text-white/60">PERSONAL OS</span>
         <span className="text-white/25">// V0.1</span>
       </div>

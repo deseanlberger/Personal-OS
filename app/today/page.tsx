@@ -255,112 +255,14 @@ export default function TodayPage() {
         )}
 
         {/* Hourly grid */}
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02]">
-          {HOURS.map((hour) => {
-            const hourBlocks = todayBlocks.filter((b) => blockOverlapsHour(b, hour));
-            const startBlocks = hourBlocks.filter((b) => blockStartsInHour(b, hour));
-            const continuingBlocks = hourBlocks.filter((b) => !blockStartsInHour(b, hour));
-            const isNowHour = hour === nowH;
-            return (
-              <div
-                key={hour}
-                className={`relative flex min-h-16 items-stretch border-b border-white/[0.04] last:border-b-0 ${
-                  isNowHour ? 'bg-emerald-400/[0.025]' : ''
-                }`}
-              >
-                <div className="num w-16 shrink-0 border-r border-white/[0.04] px-3 py-2 text-[11px] text-white/40">
-                  {to12h(`${String(hour).padStart(2, '0')}:00`)}
-                </div>
-                <div className="relative flex-1 px-3 py-2">
-                  {/* Now indicator */}
-                  {isNowHour && showNowLine && (
-                    <div
-                      className="absolute left-0 right-0 z-10 flex items-center"
-                      style={{ top: `${nowOffsetPct}%` }}
-                    >
-                      <div className="mr-1 size-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
-                      <div className="h-px flex-1 bg-emerald-400/60" />
-                    </div>
-                  )}
-
-                  {hourBlocks.length === 0 && (
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-white/20">—</div>
-                  )}
-
-                  {continuingBlocks.length > 0 && (
-                    <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-white/30">
-                      ↑ continuing: {continuingBlocks.map((b) => b.name).join(' · ')}
-                    </div>
-                  )}
-
-                  {startBlocks.map((b) => {
-                    const tone = TYPE_TONE[b.type] || TYPE_TONE.personal;
-                    const isOverride = !!b.is_override;
-                    return (
-                      <div
-                        key={b.id}
-                        className={`mb-1.5 rounded-md border px-2.5 py-1.5 ${
-                          isOverride ? 'border-amber-400/40 bg-amber-400/[0.08]' : tone
-                        } last:mb-0`}
-                      >
-                        <div className="flex items-baseline justify-between">
-                          <div className="text-sm font-medium text-white/90">
-                            {b.name}
-                            {isOverride && (
-                              <span className="ml-2 rounded border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-amber-300">
-                                ONE-OFF
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <div className="num text-[10px] text-white/50">
-                              {to12h(b.start)} – {to12h(b.end)}
-                            </div>
-                            {isOverride && b.override_id && (
-                              <button
-                                onClick={async () => {
-                                  if (!confirm(`Remove "${b.name}"?`)) return;
-                                  await fetch(`/api/calendar/overrides/${b.override_id}`, { method: 'DELETE' });
-                                  await fetchBlocks(weekOffset);
-                                }}
-                                className="text-[10px] text-amber-300/70 hover:text-amber-300"
-                                aria-label="Remove override"
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/40">
-                          {TYPE_LABEL[b.type] || b.type}
-                          {b.energy && ` · ${b.energy} energy`}
-                          {b.locked && ' · locked'}
-                        </div>
-                        {b.assigned_tasks.length > 0 && (
-                          <ul className="mt-1.5 space-y-0.5">
-                            {b.assigned_tasks.map((t) => (
-                              <li
-                                key={t.id}
-                                className="flex items-center gap-1.5 text-[12px] text-white/80"
-                              >
-                                {t.is_pinned && <span className="text-emerald-300">⭐</span>}
-                                {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
-                                <span>{t.title}</span>
-                                {t.estimated_minutes && (
-                                  <span className="num text-[10px] text-white/30">· {t.estimated_minutes}m</span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <HourlyGrid
+          todayBlocks={todayBlocks}
+          nowH={nowH}
+          nowM={nowM}
+          showNowLine={showNowLine}
+          weekOffset={weekOffset}
+          fetchBlocks={fetchBlocks}
+        />
 
         {/* One-off block override for this day */}
         <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.02] p-3 text-[12px]">
@@ -406,6 +308,134 @@ const OVERRIDE_TYPES = [
   { value: 'multitask-admin', label: 'Multi Admin' },
   { value: 'flex', label: 'Flex' },
 ] as const;
+
+const HOUR_HEIGHT_PX = 72;
+
+function timeToMin(t: string): number {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function HourlyGrid({
+  todayBlocks,
+  nowH,
+  nowM,
+  showNowLine,
+  weekOffset,
+  fetchBlocks,
+}: {
+  todayBlocks: Block[];
+  nowH: number;
+  nowM: number;
+  showNowLine: boolean;
+  weekOffset: number;
+  fetchBlocks: (offset: number) => Promise<void>;
+}) {
+  const gridStartMin = HOUR_START * 60;
+  const totalMin = (HOUR_END - HOUR_START + 1) * 60;
+  const totalHeight = (totalMin / 60) * HOUR_HEIGHT_PX;
+  const nowOffsetPx = ((nowH * 60 + nowM) - gridStartMin) / 60 * HOUR_HEIGHT_PX;
+
+  return (
+    <div className="relative rounded-xl border border-white/[0.06] bg-white/[0.02]" style={{ height: totalHeight }}>
+      {/* Hour rows (background grid) */}
+      {HOURS.map((hour, i) => {
+        const isNowHour = hour === nowH;
+        return (
+          <div
+            key={hour}
+            className={`absolute left-0 right-0 border-t border-white/[0.04] ${i === 0 ? 'border-t-0' : ''} ${
+              isNowHour ? 'bg-emerald-400/[0.025]' : ''
+            }`}
+            style={{ top: i * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX }}
+          >
+            <div className="num absolute left-3 top-1.5 text-[11px] text-white/40">
+              {to12h(`${String(hour).padStart(2, '0')}:00`)}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Now line */}
+      {showNowLine && (
+        <div
+          className="absolute left-16 right-0 z-20 flex items-center"
+          style={{ top: nowOffsetPx }}
+        >
+          <div className="mr-1 size-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+          <div className="h-px flex-1 bg-emerald-400/60" />
+        </div>
+      )}
+
+      {/* Blocks: absolutely positioned, height proportional to duration */}
+      {todayBlocks.map((b) => {
+        const startMin = timeToMin(b.start) - gridStartMin;
+        const endMin = timeToMin(b.end) - gridStartMin;
+        const top = (startMin / 60) * HOUR_HEIGHT_PX;
+        const height = ((endMin - startMin) / 60) * HOUR_HEIGHT_PX;
+        const tone = TYPE_TONE[b.type] || TYPE_TONE.personal;
+        const isOverride = !!b.is_override;
+        return (
+          <div
+            key={b.id}
+            className={`absolute left-16 right-2 z-10 overflow-hidden rounded-md border px-2.5 py-1.5 ${
+              isOverride ? 'border-amber-400/40 bg-amber-400/[0.08]' : tone
+            }`}
+            style={{ top: top + 2, height: Math.max(height - 4, 24) }}
+          >
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="text-sm font-medium text-white/90">
+                {b.name}
+                {isOverride && (
+                  <span className="ml-2 rounded border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-amber-300">
+                    ONE-OFF
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="num text-[10px] text-white/50">
+                  {to12h(b.start)} – {to12h(b.end)}
+                </div>
+                {isOverride && b.override_id && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(`Remove "${b.name}"?`)) return;
+                      await fetch(`/api/calendar/overrides/${b.override_id}`, { method: 'DELETE' });
+                      await fetchBlocks(weekOffset);
+                    }}
+                    className="text-[10px] text-amber-300/70 hover:text-amber-300"
+                    aria-label="Remove override"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/40">
+              {TYPE_LABEL[b.type] || b.type}
+              {b.energy && ` · ${b.energy} energy`}
+              {b.locked && ' · locked'}
+            </div>
+            {b.assigned_tasks.length > 0 && (
+              <ul className="mt-1.5 space-y-0.5">
+                {b.assigned_tasks.map((t) => (
+                  <li key={t.id} className="flex items-center gap-1.5 text-[12px] text-white/80">
+                    {t.is_pinned && <span className="text-emerald-300">⭐</span>}
+                    {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
+                    <span>{t.title}</span>
+                    {t.estimated_minutes && (
+                      <span className="num text-[10px] text-white/30">· {t.estimated_minutes}m</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function OverrideForm({
   date,
