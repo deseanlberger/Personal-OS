@@ -51,8 +51,8 @@ export function TopRail() {
   };
 
   return (
-    <header className="flex items-center justify-between border-b border-white/[0.06] px-6 py-3">
-      <div className="flex items-center gap-2 font-mono text-xs">
+    <header className="flex items-center gap-2 border-b border-white/[0.06] px-3 py-2 sm:gap-4 sm:px-6 sm:py-3">
+      <div className="flex shrink-0 items-center gap-2 font-mono text-xs">
         <button
           onClick={refreshPage}
           disabled={refreshing}
@@ -76,18 +76,18 @@ export function TopRail() {
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
           </svg>
         </button>
-        <span className="ml-1 size-1.5 rounded-full bg-emerald-400" />
-        <span className="text-white/60">PERSONAL OS</span>
-        <span className="text-white/25">// V0.1</span>
+        <span className="ml-1 hidden size-1.5 rounded-full bg-emerald-400 sm:inline-block" />
+        <span className="hidden text-white/60 md:inline">PERSONAL OS</span>
+        <span className="hidden text-white/25 lg:inline">// V0.1</span>
       </div>
-      <nav className="flex items-center gap-1">
+      <nav className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-1 sm:gap-1 [&::-webkit-scrollbar]:hidden">
         {TABS.map((tab) => {
           const active = pathname === tab.href;
           return (
             <Link
               key={tab.href}
               href={tab.href}
-              className={`flex min-h-11 items-center rounded-md px-3 py-2 text-[11px] tracking-[0.18em] transition ${
+              className={`flex min-h-11 shrink-0 items-center rounded-md px-2 py-2 text-[10px] tracking-[0.16em] transition sm:px-3 sm:text-[11px] sm:tracking-[0.18em] ${
                 active
                   ? 'bg-white/[0.07] text-white'
                   : 'text-white/40 hover:text-white/70'
@@ -98,20 +98,20 @@ export function TopRail() {
           );
         })}
       </nav>
-      <div className="flex items-center gap-4 font-mono text-[11px] text-white/40">
+      <div className="flex shrink-0 items-center gap-2 font-mono text-[11px] text-white/40 sm:gap-4">
         <span className="hidden lg:inline">BTC <span className="text-white/70">$—</span></span>
         <span className="hidden lg:inline">NDX <span className="text-white/70">—</span></span>
         <span className="hidden lg:inline">XAU <span className="text-white/70">$—</span></span>
         {now && (
           <>
-            <span className="hidden sm:inline">{formatDate(now)}</span>
-            <span className="text-white/70">{formatClock(now)}</span>
+            <span className="hidden md:inline">{formatDate(now)}</span>
+            <span className="hidden text-white/70 sm:inline">{formatClock(now)}</span>
           </>
         )}
         <Link
           href="/settings"
           aria-label="Settings"
-          className={`flex min-h-9 min-w-9 items-center justify-center rounded-md border transition ${
+          className={`hidden min-h-9 min-w-9 items-center justify-center rounded-md border transition sm:flex ${
             pathname.startsWith('/settings')
               ? 'border-white/20 bg-white/[0.07] text-white'
               : 'border-white/10 text-white/50 hover:bg-white/[0.04] hover:text-white/80'
@@ -123,7 +123,7 @@ export function TopRail() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </Link>
-        <Link href="/settings/profile" aria-label="Profile" className="block">
+        <Link href="/settings/profile" aria-label="Profile" className="block shrink-0">
           <Avatar initials="DB" className="hover:border-white/20" />
         </Link>
       </div>
