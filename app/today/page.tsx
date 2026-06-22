@@ -14,6 +14,8 @@ type Block = {
   type: string;
   energy: string | null;
   locked: boolean;
+  is_override?: boolean;
+  override_id?: string | null;
   assigned_tasks: { id: string; title: string; estimated_minutes: number | null; is_pinned: boolean; key: boolean }[];
 };
 
@@ -122,6 +124,8 @@ export default function TodayPage() {
     const tick = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(tick);
   }, []);
+
+  const [overrideForm, setOverrideForm] = useState<null | { open: true }>(null);
 
   const refreshWeek = async () => {
     setRefreshing(true);
@@ -291,15 +295,40 @@ export default function TodayPage() {
 
                   {startBlocks.map((b) => {
                     const tone = TYPE_TONE[b.type] || TYPE_TONE.personal;
+                    const isOverride = !!b.is_override;
                     return (
                       <div
                         key={b.id}
-                        className={`mb-1.5 rounded-md border px-2.5 py-1.5 ${tone} last:mb-0`}
+                        className={`mb-1.5 rounded-md border px-2.5 py-1.5 ${
+                          isOverride ? 'border-amber-400/40 bg-amber-400/[0.08]' : tone
+                        } last:mb-0`}
                       >
                         <div className="flex items-baseline justify-between">
-                          <div className="text-sm font-medium text-white/90">{b.name}</div>
-                          <div className="num text-[10px] text-white/50">
-                            {to12h(b.start)} – {to12h(b.end)}
+                          <div className="text-sm font-medium text-white/90">
+                            {b.name}
+                            {isOverride && (
+                              <span className="ml-2 rounded border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-amber-300">
+                                ONE-OFF
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="num text-[10px] text-white/50">
+                              {to12h(b.start)} – {to12h(b.end)}
+                            </div>
+                            {isOverride && b.override_id && (
+                              <button
+                                onClick={async () => {
+                                  if (!confirm(`Remove "${b.name}"?`)) return;
+                                  await fetch(`/api/calendar/overrides/${b.override_id}`, { method: 'DELETE' });
+                                  await fetchBlocks(weekOffset);
+                                }}
+                                className="text-[10px] text-amber-300/70 hover:text-amber-300"
+                                aria-label="Remove override"
+                              >
+                                ✕
+                              </button>
+                            )}
                           </div>
                         </div>
                         <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/40">
@@ -332,7 +361,133 @@ export default function TodayPage() {
             );
           })}
         </div>
+
+        {/* One-off block override for this day */}
+        <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.02] p-3 text-[12px]">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/70">
+                One-off override
+              </div>
+              <div className="mt-0.5 text-white/55">
+                Add a block just for {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} —
+                covering shifts, doctor visits, anything off-template.
+              </div>
+            </div>
+            <button
+              onClick={() => setOverrideForm(overrideForm ? null : { open: true })}
+              className="min-h-9 shrink-0 rounded-md border border-amber-400/40 bg-amber-400/15 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-amber-300 hover:bg-amber-400/25"
+            >
+              {overrideForm ? 'Close' : '+ Add block'}
+            </button>
+          </div>
+          {overrideForm && (
+            <OverrideForm
+              date={selectedDate}
+              onSaved={async () => {
+                await fetchBlocks(weekOffset);
+                setOverrideForm(null);
+              }}
+              onError={(msg) => setErr(msg)}
+            />
+          )}
+        </div>
       </div>
     </Shell>
+  );
+}
+
+const OVERRIDE_TYPES = [
+  { value: 'coaching', label: 'Coaching' },
+  { value: 'meeting', label: 'Meeting' },
+  { value: 'personal', label: 'Personal' },
+  { value: 'deep-thinking', label: 'Deep Thinking' },
+  { value: 'deep-admin', label: 'Deep Admin' },
+  { value: 'multitask-admin', label: 'Multi Admin' },
+  { value: 'flex', label: 'Flex' },
+] as const;
+
+function OverrideForm({
+  date,
+  onSaved,
+  onError,
+}: {
+  date: Date;
+  onSaved: () => void | Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [start, setStart] = useState('14:00');
+  const [end, setEnd] = useState('15:30');
+  const [type, setType] = useState<string>('coaching');
+  const [pending, setPending] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || pending) return;
+    setPending(true);
+    try {
+      const override_date = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const res = await fetch('/api/calendar/overrides', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          override_date,
+          start_time: start,
+          end_time: end,
+          name: name.trim(),
+          type,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setName('');
+      await onSaved();
+    } catch (err) {
+      onError((err as Error).message);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-4">
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="What is it? (e.g. Jake basketball)"
+        className="rounded-md border border-white/10 bg-black/40 px-2.5 py-1.5 text-sm text-white/90 outline-none placeholder:text-white/30 sm:col-span-4"
+      />
+      <input
+        type="time"
+        value={start}
+        onChange={(e) => setStart(e.target.value)}
+        className="num rounded-md border border-white/10 bg-black/40 px-2.5 py-1.5 text-sm text-white/90 outline-none"
+      />
+      <input
+        type="time"
+        value={end}
+        onChange={(e) => setEnd(e.target.value)}
+        className="num rounded-md border border-white/10 bg-black/40 px-2.5 py-1.5 text-sm text-white/90 outline-none"
+      />
+      <select
+        value={type}
+        onChange={(e) => setType(e.target.value)}
+        className="rounded-md border border-white/10 bg-black/40 px-2.5 py-1.5 text-sm text-white/90 outline-none"
+      >
+        {OVERRIDE_TYPES.map((t) => (
+          <option key={t.value} value={t.value}>
+            {t.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="submit"
+        disabled={!name.trim() || pending}
+        className="min-h-9 rounded-md border border-amber-400/40 bg-amber-400/15 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-amber-300 hover:bg-amber-400/25 disabled:opacity-40"
+      >
+        {pending ? 'Saving…' : 'Save block'}
+      </button>
+    </form>
   );
 }
