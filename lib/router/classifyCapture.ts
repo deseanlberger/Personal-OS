@@ -10,6 +10,12 @@ export const ClassificationSchema = z.object({
   estimated_minutes: z.number().int().positive().nullable(),
   tags: z.array(z.string()).max(5),
   summary: z.string().min(1).max(140),
+  /**
+   * 0-1 self-rated confidence in the category classification. The Telegram
+   * webhook uses this to decide whether to flag the message as uncertain
+   * and prompt for an explicit override.
+   */
+  confidence: z.number().min(0).max(1).optional().default(0.8),
 });
 
 export type Classification = z.infer<typeof ClassificationSchema>;
@@ -33,7 +39,8 @@ Output JSON ONLY (no markdown, no preamble) matching this shape:
   "energy": "high" | "med" | "low" | null,
   "estimated_minutes": <int 5-240> | null,
   "tags": ["short", "kebab-case"],
-  "summary": "short imperative title under 80 chars"
+  "summary": "short imperative title under 80 chars",
+  "confidence": <float 0..1, your confidence in the category choice>
 }
 
 Rules:
@@ -44,7 +51,8 @@ Rules:
 - For kind=journal/note/capture, set category=null and energy=null.
 - estimated_minutes: realistic guess (15 for quick admin, 60-90 for deep work, 30 for meetings).
 - tags: 0-3 short kebab-case tags (e.g. "athlete-marcus", "p360", "sales-meeting"). Empty array if nothing obvious.
-- summary: rewrite the input as a clean imperative if it's a task ("Call Phly about insurance" not "i need to call phly"), or a clean noun phrase otherwise.`;
+- summary: rewrite the input as a clean imperative if it's a task ("Call Phly about insurance" not "i need to call phly"), or a clean noun phrase otherwise.
+- confidence: 0.9+ when the category is obviously correct (clear keywords like "code", "essay", "email"). 0.6-0.8 when reasonable but multiple categories could fit. <0.6 when the input is vague or ambiguous and the category is a guess. This is used to decide whether to ask Desean for confirmation.`;
 
 function safeJsonParse(text: string): unknown {
   const trimmed = text.trim();
@@ -116,6 +124,9 @@ function classifyWithRegex(text: string): Classification {
     estimated_minutes: isTask ? 15 : null,
     tags: [],
     summary: text.length > 80 ? text.slice(0, 77) + '...' : text,
+    // Regex has no nuance — always low confidence so the Telegram
+    // confirmation flow asks the user explicitly.
+    confidence: 0.4,
   };
 }
 

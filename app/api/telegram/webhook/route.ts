@@ -13,6 +13,7 @@ import { estimateMacrosFromImage } from '@/lib/nutrition/estimator';
 import { classifyPhotoKind, parseReceiptFromImage } from '@/lib/finance/receiptParser';
 import { localDateKey } from '@/lib/habits/date';
 import { recalcWeek } from '@/lib/blocks/recalc';
+import { extractUrl, saveLink } from '@/lib/links/save';
 
 const SECRET_HEADER = 'x-telegram-bot-api-secret-token';
 const URGENCY_CHOICES = new Set(['today', 'this_week', 'this_month', 'someday']);
@@ -130,6 +131,37 @@ async function handleMessage(msg: NonNullable<TelegramUpdate['message']>): Promi
     return;
   }
 
+  // URL detection — if the message body contains a link, file it in /library
+  // instead of running the task classifier.
+  const detectedUrl = extractUrl(text);
+  if (detectedUrl) {
+    try {
+      const link = await saveLink(detectedUrl);
+      if (link) {
+        const cat = link.category ? `_${link.category}_` : '';
+        await sendMessage(
+          chatId,
+          `*Saved to Library, sir.*\n${link.title || link.url}\n${cat}${link.summary ? `\n\n${link.summary}` : ''}\n\nView all at /library.`,
+          { reply_to_message_id: msg.message_id },
+        );
+      } else {
+        await sendMessage(
+          chatId,
+          `Apologies, sir — I could not save that link.`,
+          { reply_to_message_id: msg.message_id },
+        );
+      }
+    } catch (err) {
+      console.error('[telegram] saveLink failed:', err);
+      await sendMessage(
+        chatId,
+        `Apologies, sir — link save failed: ${(err as Error).message}`,
+        { reply_to_message_id: msg.message_id },
+      );
+    }
+    return;
+  }
+
   try {
     const result = await routeCapture({ text, source: 'telegram', audio_url: audioUrl });
 
@@ -156,7 +188,10 @@ type Classification = {
   estimated_minutes: number | null;
   tags: string[];
   summary: string;
+  confidence?: number;
 };
+
+const LOW_CONFIDENCE_THRESHOLD = 0.6;
 
 const USER_ID = process.env.USER_ID || 'desean';
 
@@ -349,7 +384,12 @@ function jarvisReply(c: Classification, routedTo: 'tasks' | null): string {
     const slot = c.category ? `${c.category}` : 'general';
     const energy = c.energy ? ` · ${c.energy} energy` : '';
     const time = c.estimated_minutes ? ` · ~${c.estimated_minutes}m` : '';
-    return `*Logged, sir.* → tasks · ${urgencyHuman[c.urgency] || c.urgency}\n${c.summary}\n_${slot}${energy}${time}_${tagsLine}\n\nTap to adjust urgency or category if I misjudged.`;
+    const confidence = typeof c.confidence === 'number' ? c.confidence : 0.8;
+    const uncertain = confidence < LOW_CONFIDENCE_THRESHOLD;
+    const footer = uncertain
+      ? `\n\n⚠️ *I'm not sure about this one (${Math.round(confidence * 100)}% confident).* Pick the right category below, sir.`
+      : `\n\nTap to adjust urgency or category if I misjudged.`;
+    return `*Logged, sir.* → tasks · ${urgencyHuman[c.urgency] || c.urgency}\n${c.summary}\n_${slot}${energy}${time}_${tagsLine}${footer}`;
   }
 
   // For non-task captures (notes, journals, decisions)
