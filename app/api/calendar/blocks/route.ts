@@ -7,6 +7,17 @@ import type { Task } from '@/lib/types';
 
 const USER_ID = process.env.USER_ID || 'desean';
 
+function parseHHMMtoMin(t: string): number {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function minToHHMM(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
 /**
  * GET /api/calendar/blocks?weekOffset=N&week=A|B
  *   weekOffset: integer (default 0). 0 = current week, 1 = next, -1 = last, etc.
@@ -57,21 +68,8 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const rendered = blocks.map((b) => ({
-    id: blockId(b),
-    day: b.day,
-    start: b.start,
-    end: b.end,
-    name: b.name,
-    type: b.type,
-    energy: b.energy ?? null,
-    locked: !!b.locked,
-    is_override: false as const,
-    override_id: null as string | null,
-    assigned_tasks: byBlock.get(blockId(b)) || [],
-  }));
-
-  // Layer in any date-specific overrides for this week (Mon-Sun)
+  // Fetch this week's overrides BEFORE rendering so we can slice conflicting
+  // template blocks out of the way.
   const weekEnd = new Date(targetMonday);
   weekEnd.setDate(weekEnd.getDate() + 6);
   const weekStartIso = targetMonday.toISOString().slice(0, 10);
@@ -84,28 +82,98 @@ export async function GET(req: NextRequest) {
     .gte('override_date', weekStartIso)
     .lte('override_date', weekEndIso);
 
+  // Index overrides by day-of-week
+  type OverrideTime = { startMin: number; endMin: number };
+  const overridesByDay = new Map<number, OverrideTime[]>();
   for (const ov of overrides || []) {
     const d = new Date(ov.override_date + 'T00:00:00');
-    const day = d.getDay(); // 0 Sun..6 Sat
+    const day = d.getDay();
+    const startMin = parseHHMMtoMin(ov.start_time);
+    const endMin = parseHHMMtoMin(ov.end_time);
+    if (!overridesByDay.has(day)) overridesByDay.set(day, []);
+    overridesByDay.get(day)!.push({ startMin, endMin });
+  }
+
+  function applyOverrides(blockDay: number, blockStart: string, blockEnd: string): { start: string; end: string } | null {
+    let startMin = parseHHMMtoMin(blockStart);
+    let endMin = parseHHMMtoMin(blockEnd);
+    const dayOverrides = overridesByDay.get(blockDay) || [];
+    for (const ov of dayOverrides) {
+      // No overlap
+      if (ov.endMin <= startMin || ov.startMin >= endMin) continue;
+      // Override fully covers this block → drop it
+      if (ov.startMin <= startMin && ov.endMin >= endMin) return null;
+      // Override starts before, ends inside → trim start of block
+      if (ov.startMin <= startMin && ov.endMin > startMin) {
+        startMin = ov.endMin;
+        continue;
+      }
+      // Override starts inside, ends after → trim end of block
+      if (ov.startMin < endMin && ov.endMin >= endMin) {
+        endMin = ov.startMin;
+        continue;
+      }
+      // Override sits fully inside the block → keep the larger remaining half
+      const leftSize = ov.startMin - startMin;
+      const rightSize = endMin - ov.endMin;
+      if (leftSize >= rightSize) endMin = ov.startMin;
+      else startMin = ov.endMin;
+    }
+    if (endMin - startMin < 5) return null;
+    return { start: minToHHMM(startMin), end: minToHHMM(endMin) };
+  }
+
+  type RenderedBlock = {
+    id: string;
+    day: number;
+    start: string;
+    end: string;
+    name: string;
+    type: string;
+    energy: string | null;
+    locked: boolean;
+    is_override: boolean;
+    override_id: string | null;
+    assigned_tasks: Partial<Task>[];
+  };
+
+  const rendered: RenderedBlock[] = [];
+  for (const b of blocks) {
+    const sliced = applyOverrides(b.day, b.start, b.end);
+    if (!sliced) continue; // template block fully covered by an override
+    rendered.push({
+      id: blockId(b), // keep original ID so assigned tasks still match
+      day: b.day,
+      start: sliced.start,
+      end: sliced.end,
+      name: b.name,
+      type: b.type,
+      energy: b.energy ?? null,
+      locked: !!b.locked,
+      is_override: false,
+      override_id: null,
+      assigned_tasks: byBlock.get(blockId(b)) || [],
+    });
+  }
+
+  // Now layer in the override blocks themselves
+  for (const ov of overrides || []) {
+    const d = new Date(ov.override_date + 'T00:00:00');
     rendered.push({
       id: `OVR-${ov.id}`,
-      day,
+      day: d.getDay(),
       start: ov.start_time,
       end: ov.end_time,
       name: ov.name,
       type: ov.type,
       energy: ov.energy ?? null,
       locked: !!ov.locked,
-      is_override: false as const, // narrow — actual override marker below
+      is_override: true,
       override_id: ov.id,
       assigned_tasks: [],
-    } as (typeof rendered)[number]);
+    });
   }
-  // Mark override rows for the client (TS doesn't let us mix the literal types nicely)
-  const renderedFinal = rendered.map((b) => ({
-    ...b,
-    is_override: b.override_id !== null,
-  }));
+  const renderedFinal = rendered;
 
   return NextResponse.json({
     weekLabel,
