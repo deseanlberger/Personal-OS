@@ -18,7 +18,10 @@ type Txn = {
   is_business: boolean;
   account_id: string | null;
   needs_review: boolean | null;
+  subscription_status: 'cancelled' | 'could_cancel' | null;
 };
+
+type CategoryBudget = { category: string; monthly_amount: number };
 
 type AccountLite = { id: string; name: string; short_name: string | null; last_4: string | null };
 
@@ -38,12 +41,20 @@ export async function GET(req: NextRequest) {
 
   const { data: txns, error } = await supabase
     .from('transactions')
-    .select('id, txn_date, amount, vendor, category, is_business, account_id, needs_review')
+    .select('id, txn_date, amount, vendor, category, is_business, account_id, needs_review, subscription_status')
     .eq('user_id', USER_ID)
     .eq('needs_review', false)
     .gte('txn_date', since.toISOString().slice(0, 10))
     .order('txn_date', { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: budgets } = await supabase
+    .from('category_budgets')
+    .select('category, monthly_amount')
+    .eq('user_id', USER_ID);
+  const budgetByCategory = new Map<string, number>(
+    ((budgets || []) as CategoryBudget[]).map((b) => [b.category, Number(b.monthly_amount)]),
+  );
 
   const { data: accounts } = await supabase
     .from('accounts')
@@ -207,9 +218,60 @@ export async function GET(req: NextRequest) {
     savings: { pct: savings_pct, amount: thisMonth.income * (savings_pct / 100) },
   };
 
+  // Savings tracker — rollup of recurring charges flagged cancelled / could-cancel.
+  // We sum the most recent occurrence per vendor (treating it as the monthly cost)
+  // and project annual savings.
+  type StatusVendor = { vendor: string; amount: number; last_date: string };
+  const cancelledMap = new Map<string, StatusVendor>();
+  const couldCancelMap = new Map<string, StatusVendor>();
+  for (const t of spends) {
+    const vendor = (t.vendor || '').trim();
+    if (!vendor) continue;
+    const map =
+      t.subscription_status === 'cancelled' ? cancelledMap
+      : t.subscription_status === 'could_cancel' ? couldCancelMap
+      : null;
+    if (!map) continue;
+    const prev = map.get(vendor);
+    if (!prev || t.txn_date > prev.last_date) {
+      map.set(vendor, { vendor, amount: Number(t.amount), last_date: t.txn_date });
+    }
+  }
+  const cancelled = Array.from(cancelledMap.values()).sort((a, b) => b.amount - a.amount);
+  const could_cancel = Array.from(couldCancelMap.values()).sort((a, b) => b.amount - a.amount);
+  const savings_tracker = {
+    cancelled_monthly: cancelled.reduce((s, v) => s + v.amount, 0),
+    cancelled_annual: cancelled.reduce((s, v) => s + v.amount, 0) * 12,
+    could_cancel_monthly: could_cancel.reduce((s, v) => s + v.amount, 0),
+    could_cancel_annual: could_cancel.reduce((s, v) => s + v.amount, 0) * 12,
+    cancelled_items: cancelled,
+    could_cancel_items: could_cancel,
+  };
+
+  // Per-category-per-month budget tracking
+  const budgets_status = Array.from(budgetByCategory.entries()).map(([category, monthly]) => {
+    const perMonth: { month: string; spent: number; pct: number }[] = [];
+    for (const m of totals_by_month) {
+      const monthCatTotal = spends
+        .filter((t) => t.txn_date.slice(0, 7) === m.month && (t.category || 'uncategorized') === category)
+        .reduce((s, t) => s + Number(t.amount), 0);
+      perMonth.push({ month: m.month, spent: monthCatTotal, pct: monthly > 0 ? (monthCatTotal / monthly) * 100 : 0 });
+    }
+    const avgSpent = perMonth.length > 0 ? perMonth.reduce((s, m) => s + m.spent, 0) / perMonth.length : 0;
+    return {
+      category,
+      monthly_budget: monthly,
+      avg_spent: avgSpent,
+      avg_pct: monthly > 0 ? (avgSpent / monthly) * 100 : 0,
+      per_month: perMonth,
+    };
+  });
+
   return NextResponse.json({
     months,
     totals_by_month,
+    savings_tracker,
+    budgets: budgets_status,
     by_category,
     by_account,
     by_vendor,

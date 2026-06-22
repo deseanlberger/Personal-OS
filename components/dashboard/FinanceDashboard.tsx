@@ -23,6 +23,15 @@ type Subscription = {
   avg_per_month: number;
 };
 
+type StatusVendor = { vendor: string; amount: number; last_date: string };
+type BudgetRow = {
+  category: string;
+  monthly_budget: number;
+  avg_spent: number;
+  avg_pct: number;
+  per_month: { month: string; spent: number; pct: number }[];
+};
+
 type Summary = {
   months: number;
   totals_by_month: MonthBucket[];
@@ -38,6 +47,15 @@ type Summary = {
     tithe: { pct: number; amount: number };
     savings: { pct: number; amount: number };
   };
+  savings_tracker: {
+    cancelled_monthly: number;
+    cancelled_annual: number;
+    could_cancel_monthly: number;
+    could_cancel_annual: number;
+    cancelled_items: StatusVendor[];
+    could_cancel_items: StatusVendor[];
+  };
+  budgets: BudgetRow[];
   total_transactions: number;
   total_spend: number;
   total_income: number;
@@ -355,7 +373,222 @@ export function FinanceDashboard({ refreshKey }: { refreshKey?: number }) {
           </ul>
         </div>
       )}
+
+      <SavingsTracker tracker={data.savings_tracker} />
+      <BudgetSection budgets={data.budgets} />
+      <InsightsSection />
     </section>
+  );
+}
+
+function SavingsTracker({ tracker }: { tracker: Summary['savings_tracker'] }) {
+  const hasAny = tracker.cancelled_items.length > 0 || tracker.could_cancel_items.length > 0;
+  if (!hasAny) {
+    return (
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Savings tracker</div>
+        <div className="mt-2 text-[12px] text-white/40">
+          Mark a transaction as <strong>cancelled</strong> or <strong>could cancel</strong> in the list below to start tracking subscription savings.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/[0.06] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/85">Already saved</div>
+        <div className="num mt-1 text-2xl text-emerald-300">{fmtMoney(tracker.cancelled_annual)}<span className="ml-1 text-[11px] text-emerald-300/60">/ yr</span></div>
+        <div className="num mt-0.5 text-[10px] text-white/40">
+          {fmtMoney(tracker.cancelled_monthly)} / mo · {tracker.cancelled_items.length} cancelled
+        </div>
+        {tracker.cancelled_items.length > 0 && (
+          <ul className="mt-2 space-y-0.5 text-[11px] text-white/65">
+            {tracker.cancelled_items.slice(0, 5).map((v) => (
+              <li key={v.vendor} className="flex items-center justify-between">
+                <span className="truncate line-through decoration-emerald-400/50">{v.vendor}</span>
+                <span className="num">{fmtMoney(v.amount)}/mo</span>
+              </li>
+            ))}
+            {tracker.cancelled_items.length > 5 && <li className="text-white/30">+ {tracker.cancelled_items.length - 5} more</li>}
+          </ul>
+        )}
+      </div>
+      <div className="rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/85">Could cancel</div>
+        <div className="num mt-1 text-2xl text-amber-300">{fmtMoney(tracker.could_cancel_annual)}<span className="ml-1 text-[11px] text-amber-300/60">/ yr potential</span></div>
+        <div className="num mt-0.5 text-[10px] text-white/40">
+          {fmtMoney(tracker.could_cancel_monthly)} / mo · {tracker.could_cancel_items.length} flagged
+        </div>
+        {tracker.could_cancel_items.length > 0 && (
+          <ul className="mt-2 space-y-0.5 text-[11px] text-white/65">
+            {tracker.could_cancel_items.slice(0, 5).map((v) => (
+              <li key={v.vendor} className="flex items-center justify-between">
+                <span className="truncate">{v.vendor}</span>
+                <span className="num">{fmtMoney(v.amount)}/mo</span>
+              </li>
+            ))}
+            {tracker.could_cancel_items.length > 5 && <li className="text-white/30">+ {tracker.could_cancel_items.length - 5} more</li>}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BudgetSection({ budgets }: { budgets: BudgetRow[] }) {
+  const [adding, setAdding] = useState(false);
+  const [cat, setCat] = useState('food');
+  const [amount, setAmount] = useState('');
+  const [pending, setPending] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = Number(amount);
+    if (!cat || !Number.isFinite(n) || n < 0 || pending) return;
+    setPending(true);
+    await fetch('/api/finance/budgets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category: cat, monthly_amount: n }),
+    });
+    setAmount('');
+    setAdding(false);
+    setPending(false);
+    setRefreshKey((v) => v + 1); // hint to parent — they should refetch when refreshKey changes
+    // The parent re-fetches on its own refreshKey, but we trigger a soft reload by reloading the page
+    if (typeof window !== 'undefined') window.location.reload();
+  };
+  const remove = async (category: string) => {
+    if (!confirm(`Remove budget for ${category}?`)) return;
+    await fetch(`/api/finance/budgets?category=${encodeURIComponent(category)}`, { method: 'DELETE' });
+    if (typeof window !== 'undefined') window.location.reload();
+  };
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Budgets</div>
+        <button
+          onClick={() => setAdding((v) => !v)}
+          className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/70 hover:text-emerald-300"
+        >
+          {adding ? 'cancel' : '+ add'}
+        </button>
+      </div>
+      {adding && (
+        <form onSubmit={submit} className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <select value={cat} onChange={(e) => setCat(e.target.value)} className="rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white/85 outline-none">
+            {['food','gas','supplements','athlete-fees','rent','software','travel','gym-equipment','office','medical','other','uncategorized'].map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="Monthly $ limit"
+            inputMode="decimal"
+            className="num rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white/85 outline-none"
+          />
+          <button
+            type="submit"
+            disabled={!amount || pending}
+            className="rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+          >
+            {pending ? 'Saving…' : 'Save'}
+          </button>
+        </form>
+      )}
+      {budgets.length === 0 && !adding && (
+        <div className="text-[12px] text-white/40">No budgets set. Click +add to start tracking a category.</div>
+      )}
+      <ul className="space-y-2">
+        {budgets.map((b) => {
+          const tone =
+            b.avg_pct >= 100 ? 'border-red-400/40 bg-red-400/[0.06]'
+            : b.avg_pct >= 80 ? 'border-amber-400/40 bg-amber-400/[0.06]'
+            : 'border-emerald-400/30 bg-emerald-400/[0.06]';
+          return (
+            <li key={b.category} className={`group rounded-md border px-3 py-2 ${tone}`}>
+              <div className="flex items-baseline justify-between">
+                <div className="text-sm text-white/85">{b.category}</div>
+                <div className="flex items-center gap-3 num text-[11px] text-white/75">
+                  <span>{fmtMoney(b.avg_spent)} avg</span>
+                  <span>/ {fmtMoney(b.monthly_budget)}</span>
+                  <span className={b.avg_pct >= 100 ? 'text-red-300' : b.avg_pct >= 80 ? 'text-amber-300' : 'text-emerald-300'}>
+                    {b.avg_pct.toFixed(0)}%
+                  </span>
+                  <button onClick={() => remove(b.category)} className="text-white/20 opacity-0 transition group-hover:opacity-100 hover:text-red-400/80">✕</button>
+                </div>
+              </div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.05]">
+                <div
+                  className={`h-full ${b.avg_pct >= 100 ? 'bg-red-400/70' : b.avg_pct >= 80 ? 'bg-amber-400/70' : 'bg-emerald-400/70'}`}
+                  style={{ width: `${Math.min(100, b.avg_pct)}%` }}
+                />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <input type="hidden" value={refreshKey} />
+    </div>
+  );
+}
+
+function InsightsSection() {
+  const [items, setItems] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const fetchInsights = useCallback(async (force = false) => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/finance/insights${force ? '?force=1' : ''}`, { cache: 'no-store' });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setItems(body.insights || []);
+      setGeneratedAt(body.generated_at || null);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInsights();
+  }, [fetchInsights]);
+
+  return (
+    <div className="rounded-xl border border-blue-400/20 bg-blue-400/[0.04] p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-blue-300/85">AI insights</div>
+        <button
+          onClick={() => fetchInsights(true)}
+          disabled={loading}
+          className="text-[10px] uppercase tracking-[0.18em] text-blue-300/70 hover:text-blue-300 disabled:opacity-40"
+        >
+          {loading ? '…' : 'refresh'}
+        </button>
+      </div>
+      {err && <div className="text-[12px] text-red-300">{err}</div>}
+      {!err && items.length === 0 && !loading && (
+        <div className="text-[12px] text-white/40">Not enough data yet.</div>
+      )}
+      <ul className="space-y-1.5">
+        {items.map((s, i) => (
+          <li key={i} className="text-[13px] leading-relaxed text-white/85">
+            · {s}
+          </li>
+        ))}
+      </ul>
+      {generatedAt && (
+        <div className="mt-3 text-[10px] uppercase tracking-[0.18em] text-white/30">
+          Updated {new Date(generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        </div>
+      )}
+    </div>
   );
 }
 

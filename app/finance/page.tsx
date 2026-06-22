@@ -23,6 +23,7 @@ type Transaction = {
   category: string | null;
   memo: string | null;
   is_business: boolean;
+  subscription_status?: 'cancelled' | 'could_cancel' | null;
   source: string;
   receipt_image_url: string | null;
   needs_review?: boolean;
@@ -238,6 +239,31 @@ export default function FinancePage() {
                     </div>
                   </div>
                   <div className="num shrink-0 text-sm text-white/90">${Number(t.amount).toFixed(2)}</div>
+                  <select
+                    value={t.subscription_status || ''}
+                    onChange={async (e) => {
+                      const v = (e.target.value || null) as 'cancelled' | 'could_cancel' | null;
+                      await fetch(`/api/transactions/${t.id}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ subscription_status: v }),
+                      });
+                      setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, subscription_status: v } : x)));
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className={`shrink-0 rounded-md border px-1.5 py-1 text-[10px] outline-none ${
+                      t.subscription_status === 'cancelled'
+                        ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
+                        : t.subscription_status === 'could_cancel'
+                          ? 'border-amber-400/40 bg-amber-400/10 text-amber-300'
+                          : 'border-white/10 bg-black/30 text-white/40'
+                    }`}
+                    title="Subscription status"
+                  >
+                    <option value="">—</option>
+                    <option value="could_cancel">could cancel</option>
+                    <option value="cancelled">cancelled</option>
+                  </select>
                   <button
                     onClick={() => deleteTransaction(t.id)}
                     className="shrink-0 text-white/20 opacity-0 transition group-hover:opacity-100 hover:text-red-400/80"
