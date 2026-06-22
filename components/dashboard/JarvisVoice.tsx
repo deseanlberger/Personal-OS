@@ -38,6 +38,71 @@ export function JarvisVoice() {
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const speakingRef = useRef(false);
 
+  // Reusable audio element so iOS keeps it "unlocked" after the first tap.
+  // We create it lazily, but always inside a user gesture.
+  const primedRef = useRef(false);
+  const getAudioEl = useCallback(() => {
+    if (!audioRef.current) {
+      const a = new Audio();
+      a.preload = 'auto';
+      audioRef.current = a;
+    }
+    return audioRef.current;
+  }, []);
+
+  const primeAudio = useCallback(async () => {
+    if (primedRef.current) return;
+    const a = getAudioEl();
+    // Play a silent data URL to unlock subsequent .play() calls on iOS.
+    // 0.1s of pure silence MP3 (RFC-3550 compliant, ~80 bytes).
+    a.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAADB8AhSmxhIIEVCSiJrDCQBTcu3UrAIwUdkRgQbFAZC1CQEwTJ9mjRvBA4UOLD8nKVOWfh+UlK3z/177OXrfOdKl7pyn3Xf//FH///WyXJedZKgJoFqQAA';
+    try {
+      await a.play();
+      a.pause();
+      primedRef.current = true;
+    } catch {
+      // First play may still fail; treat as best-effort
+    }
+  }, [getAudioEl]);
+
+  const briefMe = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    setText(null);
+    // 1. Prime the audio element synchronously (inside the user-tap context)
+    await primeAudio();
+    // 2. Hit the combined brief-audio endpoint — single fetch, text via header.
+    try {
+      const res = await fetch('/api/jarvis/brief-audio', { cache: 'no-store' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const textHeader = res.headers.get('X-Brief-Text');
+      if (textHeader) setText(decodeURIComponent(textHeader));
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = getAudioEl();
+      const prevSrc = a.src;
+      a.src = url;
+      speakingRef.current = true;
+      a.onended = () => {
+        speakingRef.current = false;
+        URL.revokeObjectURL(url);
+      };
+      try {
+        await a.play();
+      } catch (e) {
+        if (prevSrc && prevSrc.startsWith('blob:')) URL.revokeObjectURL(prevSrc);
+        throw new Error(`audio.play blocked: ${(e as Error).message}`);
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [getAudioEl, primeAudio]);
+
   const speak = useCallback(async (textToSpeak: string) => {
     try {
       speakingRef.current = true;
@@ -49,38 +114,18 @@ export function JarvisVoice() {
       if (!res.ok) throw new Error(`speak ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        URL.revokeObjectURL(audioRef.current.src);
-      }
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => {
+      const a = getAudioEl();
+      a.src = url;
+      a.onended = () => {
         speakingRef.current = false;
         URL.revokeObjectURL(url);
       };
-      await audio.play();
+      await a.play();
     } catch (e) {
       speakingRef.current = false;
       setErr((e as Error).message);
     }
-  }, []);
-
-  const briefMe = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const res = await fetch('/api/jarvis/brief', { cache: 'no-store' });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      setText(body.text);
-      await speak(body.text);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [speak]);
+  }, [getAudioEl]);
 
   const sendMessage = useCallback(
     async (message: string) => {
@@ -186,7 +231,10 @@ export function JarvisVoice() {
             {loading ? 'Briefing…' : 'Brief me'}
           </button>
           <button
-            onClick={() => setListening((v) => !v)}
+            onClick={async () => {
+              await primeAudio();
+              setListening((v) => !v);
+            }}
             className={`min-h-9 rounded-md border px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] transition ${
               listening
                 ? 'border-red-400/60 bg-red-400/20 text-red-300 animate-pulse'
