@@ -173,6 +173,52 @@ export async function recalcWeek(label?: WeekLabel): Promise<RecalcResult> {
     }
   }
 
+  // Pass 2 — fill remaining current-week slots so no block is ever empty
+  // when there are tasks available. First pull from skipped (no category
+  // match found), then pull tasks placed in next week back into today.
+  const assignedTaskIds = new Set(assignments.map((a) => a.taskId).concat(overflow.map((a) => a.taskId)));
+  const slottableLeftovers = tasks.filter(
+    (t) => !assignedTaskIds.has(t.id) && t.category && !LOCKED_TYPES.has(t.category) && t.category !== 'meeting',
+  );
+  for (const slot of [...slotsCurrent]) {
+    if (slot.remainingMin < REMAINDER_MIN) continue;
+    // Prefer unplaced tasks first
+    let pulled: Task | null = null;
+    const leftoverIdx = slottableLeftovers.findIndex((t) => (t.estimated_minutes ?? 45) <= TASK_HARD_CAP_MIN || slot.remainingMin >= REMAINDER_MIN);
+    if (leftoverIdx !== -1) {
+      pulled = slottableLeftovers[leftoverIdx];
+      slottableLeftovers.splice(leftoverIdx, 1);
+    } else {
+      // Steal from next-week overflow — pull the lowest-priority overflow task back
+      const stealIdx = overflow.length - 1;
+      if (stealIdx >= 0) {
+        const stolen = overflow.splice(stealIdx, 1)[0];
+        pulled = tasks.find((t) => t.id === stolen.taskId) || null;
+      }
+    }
+    if (!pulled) continue;
+    const desired = pulled.estimated_minutes ?? 45;
+    const taskMin = Math.min(desired, TASK_HARD_CAP_MIN, slot.remainingMin);
+    await supabase
+      .from('tasks')
+      .update({
+        assigned_block_id: slot.id,
+        assigned_week_offset: 0,
+        momentum_score: computeMomentum(pulled),
+      })
+      .eq('id', pulled.id);
+    assignments.push({ taskId: pulled.id, title: pulled.title, blockId: slot.id, minutes: taskMin, weekOffset: 0 });
+    slot.remainingMin -= taskMin + 10;
+    if (slot.remainingMin < REMAINDER_MIN) {
+      const idx = slotsCurrent.indexOf(slot);
+      if (idx !== -1) slotsCurrent.splice(idx, 1);
+    }
+  }
+  // Remove pass-2 pulled tasks from the skipped list
+  const stillSkipped = skipped.filter((s) => !assignments.find((a) => a.taskId === s.taskId));
+  skipped.length = 0;
+  skipped.push(...stillSkipped);
+
   // 2. One Thing: highest-momentum task in a HIGH-energy current-week block → is_pinned
   await supabase.from('tasks').update({ is_pinned: false }).eq('user_id', USER_ID).eq('is_pinned', true);
 
