@@ -69,16 +69,41 @@ function blockStartsInHour(b: Block, hour: number): boolean {
   return s.h === hour;
 }
 
+function mondayOf(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  const dow = x.getDay(); // 0 Sun..6 Sat
+  const offsetToMon = dow === 0 ? -6 : 1 - dow;
+  x.setDate(x.getDate() + offsetToMon);
+  return x;
+}
+
 export default function TodayPage() {
   const [data, setData] = useState<BlocksResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [now, setNow] = useState<Date>(new Date());
+  // 0 = today, +1 = tomorrow, -1 = yesterday, etc.
+  const [dayOffset, setDayOffset] = useState(0);
 
-  const fetchBlocks = useCallback(async () => {
+  const selectedDate = useMemo(() => {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + dayOffset);
+    return d;
+  }, [now, dayOffset]);
+
+  const weekOffset = useMemo(() => {
+    const todayMonday = mondayOf(now);
+    const selMonday = mondayOf(selectedDate);
+    const diffDays = Math.round((selMonday.getTime() - todayMonday.getTime()) / 86_400_000);
+    return Math.round(diffDays / 7);
+  }, [now, selectedDate]);
+
+  const fetchBlocks = useCallback(async (offset: number) => {
     try {
-      const res = await fetch('/api/calendar/blocks?weekOffset=0', { cache: 'no-store' });
+      const res = await fetch(`/api/calendar/blocks?weekOffset=${offset}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`blocks ${res.status}`);
       const body = (await res.json()) as BlocksResponse;
       setData(body);
@@ -89,9 +114,9 @@ export default function TodayPage() {
   }, []);
 
   useEffect(() => {
-    fetchBlocks();
-    return onEvent(EVENTS.TASK_CHANGED, fetchBlocks);
-  }, [fetchBlocks]);
+    fetchBlocks(weekOffset);
+    return onEvent(EVENTS.TASK_CHANGED, () => fetchBlocks(weekOffset));
+  }, [fetchBlocks, weekOffset]);
 
   useEffect(() => {
     const tick = setInterval(() => setNow(new Date()), 60_000);
@@ -109,7 +134,7 @@ export default function TodayPage() {
         overflow?: number;
         skipped?: number;
       };
-      await fetchBlocks();
+      await fetchBlocks(weekOffset);
       emit(EVENTS.TASK_CHANGED);
       const parts: string[] = [];
       if (body.classified) parts.push(`${body.classified} classified`);
@@ -126,20 +151,28 @@ export default function TodayPage() {
     }
   };
 
-  const today = now.getDay();
+  const selectedDayOfWeek = selectedDate.getDay();
+  const isToday = dayOffset === 0;
   const todayBlocks = useMemo(() => {
     if (!data) return [];
     return data.blocks
-      .filter((b) => b.day === today)
+      .filter((b) => b.day === selectedDayOfWeek)
       .sort((a, b) => a.start.localeCompare(b.start));
-  }, [data, today]);
+  }, [data, selectedDayOfWeek]);
 
   const nowH = now.getHours();
   const nowM = now.getMinutes();
   const nowOffsetPct = ((nowM / 60) * 100).toFixed(1);
-  const showNowLine = nowH >= HOUR_START && nowH <= HOUR_END;
+  const showNowLine = isToday && nowH >= HOUR_START && nowH <= HOUR_END;
 
   const taskCount = todayBlocks.reduce((sum, b) => sum + b.assigned_tasks.length, 0);
+
+  const headerLabel = useMemo(() => {
+    if (dayOffset === 0) return 'Today';
+    if (dayOffset === -1) return 'Yesterday';
+    if (dayOffset === 1) return 'Tomorrow';
+    return selectedDate.toLocaleDateString('en-US', { weekday: 'long' });
+  }, [dayOffset, selectedDate]);
 
   return (
     <Shell>
@@ -147,7 +180,7 @@ export default function TodayPage() {
         <header className="flex items-baseline justify-between">
           <div>
             <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
-              Today · {now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+              {headerLabel} · {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
             </h1>
             <p className="mt-1 text-sm text-white/55">
               Every hour from 5 AM to 9 PM. Tasks slot into their assigned blocks automatically.
@@ -167,9 +200,50 @@ export default function TodayPage() {
           </div>
         </header>
 
+        {/* Day navigation */}
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+          <button
+            onClick={() => setDayOffset((v) => v - 1)}
+            aria-label="Previous day"
+            className="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-white/10 text-white/60 transition hover:bg-white/[0.04] hover:text-white"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <div className="flex flex-1 items-center justify-center gap-3">
+            <div className="text-center">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">{headerLabel}</div>
+              <div className="num text-[11px] text-white/70">
+                {selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </div>
+            </div>
+            {!isToday && (
+              <button
+                onClick={() => setDayOffset(0)}
+                className="rounded-md border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/20"
+              >
+                Today
+              </button>
+            )}
+          </div>
+          <button
+            onClick={() => setDayOffset((v) => v + 1)}
+            aria-label="Next day"
+            className="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-white/10 text-white/60 transition hover:bg-white/[0.04] hover:text-white"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        </div>
+
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.18em] text-white/40">
           <span className="num">{todayBlocks.length} blocks</span>
           <span className="num">{taskCount} tasks</span>
+          {weekOffset !== 0 && (
+            <span className="text-amber-300/70">· {weekOffset > 0 ? 'next' : 'past'} week view</span>
+          )}
         </div>
 
         {err && (
