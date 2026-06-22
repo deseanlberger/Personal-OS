@@ -436,12 +436,22 @@ function TimelineColumn({
   onChanged: () => void | Promise<void>;
   onTaskClick: (taskId: string) => void;
 }) {
+  const [hourPx, setHourPx] = useState(HOUR_HEIGHT_PX);
+  useEffect(() => {
+    const recompute = () => {
+      if (typeof window === 'undefined') return;
+      setHourPx(window.innerWidth < 640 ? 56 : HOUR_HEIGHT_PX);
+    };
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, []);
   const gridStartMin = HOUR_START * 60;
   const totalMin = (HOUR_END - HOUR_START + 1) * 60;
-  const totalHeight = (totalMin / 60) * HOUR_HEIGHT_PX;
+  const totalHeight = (totalMin / 60) * hourPx;
   const nowH = now.getHours();
   const nowM = now.getMinutes();
-  const nowOffsetPx = (nowH * 60 + nowM - gridStartMin) / 60 * HOUR_HEIGHT_PX;
+  const nowOffsetPx = (nowH * 60 + nowM - gridStartMin) / 60 * hourPx;
   const showNowLine = isToday && nowH >= HOUR_START && nowH <= HOUR_END;
 
   return (
@@ -454,7 +464,7 @@ function TimelineColumn({
         <div
           key={hour}
           className={`absolute left-0 right-0 ${i > 0 ? 'border-t border-white/[0.03]' : ''}`}
-          style={{ top: i * HOUR_HEIGHT_PX }}
+          style={{ top: i * hourPx }}
         >
           <div className="num absolute left-3 top-1 text-[10px] text-white/30">
             {to12h(`${String(hour).padStart(2, '0')}:00`)}
@@ -467,7 +477,7 @@ function TimelineColumn({
         <div
           key={`half-${hour}`}
           className="absolute left-16 right-0 border-t border-white/[0.015]"
-          style={{ top: i * HOUR_HEIGHT_PX + HOUR_HEIGHT_PX / 2 }}
+          style={{ top: i * hourPx + hourPx / 2 }}
         />
       ))}
 
@@ -489,8 +499,8 @@ function TimelineColumn({
       {todayBlocks.map((b) => {
         const startMin = parseHHMM(b.start);
         const endMin = parseHHMM(b.end);
-        const top = (startMin - gridStartMin) / 60 * HOUR_HEIGHT_PX;
-        const height = (endMin - startMin) / 60 * HOUR_HEIGHT_PX;
+        const top = (startMin - gridStartMin) / 60 * hourPx;
+        const height = (endMin - startMin) / 60 * hourPx;
         const isOverride = !!b.is_override;
         const tone = TYPE_TONE[b.type] || TYPE_TONE.personal;
         const isActive = b.day === now.getDay() && startMin <= nowH * 60 + nowM && endMin > nowH * 60 + nowM && isToday;

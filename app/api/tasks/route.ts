@@ -67,6 +67,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Guarantee: every task has a category. Fall back to 'flex' if classifier
+  // returned nothing or wasn't called. Flex blocks accept any task in the
+  // recalc engine, so the task at least lands somewhere.
+  if (!category) category = 'flex';
+
   const { data, error } = await supabase
     .from('tasks')
     .insert({
@@ -101,10 +106,8 @@ export async function POST(req: NextRequest) {
       .catch((err: Error) => console.error('[/api/tasks POST] embed failed:', err.message));
   }
 
-  // Auto-recalc if this task is slottable so it lands in a matching block.
-  if (category && category !== 'meeting' && category !== 'personal') {
-    recalcWeek().catch((err) => console.error('[/api/tasks POST] recalc failed:', err.message));
-  }
+  // Always trigger recalc so the new task lands in a matching block.
+  recalcWeek().catch((err) => console.error('[/api/tasks POST] recalc failed:', err.message));
 
   return NextResponse.json({ task: data });
 }
