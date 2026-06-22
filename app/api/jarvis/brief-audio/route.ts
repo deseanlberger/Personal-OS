@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { openaiClient, openaiAvailable } from '@/lib/llm/openai';
+import { jarvisTTS } from '@/lib/llm/jarvisVoice';
 
 // Internal helper — reuses the brief endpoint's logic by importing the GET fn.
 // Keeping them as separate files would require duplicating the data-gathering;
@@ -30,9 +30,6 @@ async function fetchBriefText(req: Request): Promise<string> {
  * fetch lets the browser play immediately when the response arrives.
  */
 export async function GET(req: Request) {
-  if (!openaiAvailable()) {
-    return NextResponse.json({ error: 'OpenAI not configured' }, { status: 500 });
-  }
   let text: string;
   try {
     text = await fetchBriefText(req);
@@ -41,13 +38,7 @@ export async function GET(req: Request) {
   }
 
   try {
-    const response = await openaiClient().audio.speech.create({
-      model: 'tts-1',
-      voice: 'onyx',
-      input: text.slice(0, 4000),
-      response_format: 'mp3',
-    });
-    const ab = await response.arrayBuffer();
+    const ab = await jarvisTTS(text);
     return new Response(ab, {
       status: 200,
       headers: {
