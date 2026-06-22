@@ -57,8 +57,6 @@ export default function FinancePage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<string | null>(null);
   const [pendingParse, setPendingParse] = useState<ParsedReceipt | null>(null);
   const [scope, setScope] = useState<FinanceScope>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -152,28 +150,6 @@ export default function FinancePage() {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const scanGmail = async () => {
-    setScanning(true);
-    setScanResult(null);
-    setError(null);
-    try {
-      const res = await fetch('/api/finance/gmail-scan?hours=72', { method: 'POST' });
-      const body = await res.json();
-      if (!res.ok || !body.ok) {
-        setError(body.error || `scan failed (${res.status})`);
-        return;
-      }
-      setScanResult(
-        `Scanned ${body.scanned} · found ${body.receipts_found} · inserted ${body.inserted} · dupes ${body.duplicates}`,
-      );
-      await fetchAll();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setScanning(false);
-    }
-  };
-
   return (
     <Shell>
       <div className="mx-auto max-w-5xl space-y-6">
@@ -181,23 +157,13 @@ export default function FinancePage() {
           <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
             Finance
           </h1>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={scanGmail}
-              disabled={scanning}
-              className="min-h-9 rounded-md border border-sky-400/40 bg-sky-400/15 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-sky-300 hover:bg-sky-400/25 disabled:opacity-40"
-              title="Pull receipts and credit card alerts from Gmail (last 72h)"
-            >
-              {scanning ? '✉ Scanning…' : '✉ Scan Gmail'}
-            </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="min-h-9 rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
-            >
-              {uploading ? '📷 Reading…' : '📷 Snap Receipt'}
-            </button>
-          </div>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="min-h-9 rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+          >
+            {uploading ? '📷 Reading…' : '📷 Snap Receipt'}
+          </button>
           <input
             ref={fileInputRef}
             type="file"
@@ -212,11 +178,6 @@ export default function FinancePage() {
         </header>
 
         {error && <div className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-300">⚠ {error}</div>}
-        {scanResult && (
-          <div className="rounded-md border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-sm text-sky-300">
-            ✉ {scanResult}
-          </div>
-        )}
 
         {/* Personal / Business / All scope toggle */}
         <div className="flex items-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1">
