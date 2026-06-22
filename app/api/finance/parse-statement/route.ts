@@ -31,7 +31,19 @@ For each transaction, output JSON with:
 - amount: positive for money OUT (purchases, fees, interest), negative for money IN (income, refunds, returns)
 - vendor: clean merchant name (strip prefixes like "AMAZON MKTPL*BV57O5F72" → "Amazon", "SP+AFF* ETHOS FIT" → "Ethos Fit", "EXERCISE.COM BUSINESS" → "Exercise.com")
 - category: pick ONE from: food, gas, supplements, athlete-fees, rent, software, travel, gym-equipment, office, medical, other
-- is_business: true if it's a coaching/training/business expense (Exercise.com, HighLevel, Output Sports, VALD, SmartWaiver, Train Heroic, Zapier, Anthropic, ElevenLabs, Recall, Riverside.fm, Staples for office, Output Performance gear); false for personal (Amazon, Target, restaurants, groceries, gas, Spectrum, Disney, Spotify, Apple, etc)
+- is_business: TRUE if it's a coaching/training/business expense. FALSE for personal.
+
+  CARD DEFAULTS (use these to bias your decision; flip per-row only when the vendor strongly suggests otherwise):
+  - Card ending 4316 (Chase Freedom): BUSINESS RECURRING / SUBSCRIPTIONS card — default is_business=true for ALL charges. This card is dedicated to business software subscriptions (Exercise.com, HighLevel, Train Heroic, Zapier, Anthropic, ElevenLabs, Recall, Riverside.fm, SmartWaiver, Output Sports recurring). Flip to false ONLY for unambiguously personal vendors that slipped onto this card by accident (clear groceries, restaurants, personal Amazon orders). When in doubt on 4316 → mark business.
+  - Card ending 2860 (Chase Freedom Unlimited): PERSONAL CARD — default is_business=false. Flip to true only for clear business vendors (Exercise.com, HighLevel, Output Sports, VALD, Train Heroic, Zapier, Anthropic, ElevenLabs, Recall, Riverside.fm, SmartWaiver, Google Workspace, Staples).
+  - Apple Card: PERSONAL CARD — default is_business=false. Apple.com subscriptions are personal unless clearly business (e.g. Ring AI Pro for work transcription = business).
+  - Card ending 1160 (USAA): BUSINESS CARD — default is_business=true. Flip to false for clear personal (Walmart, restaurants, Bier Garden, Vuori clothing, Spectrum personal, LAZ Parking when not for a work trip, Monarch Money personal finance).
+  - Card ending 6839 or 5265 (Chase debit / checking): MIXED — categorize per-vendor (Exercise.com Pay = personal income, Anthropic / Meta ads / Wodify / Square Payroll = business, Vons/Costco/restaurants = personal, Zelle to Landlord = personal rent).
+  - Unknown / no card identified: MIXED — categorize per-vendor.
+
+  KEY VENDORS that are ALWAYS business regardless of card: Exercise.com, HighLevel, Output Sports, Output Performance, VALD, Train Heroic, Zapier, Anthropic, OpenAI, ElevenLabs, Recall, Riverside.fm, SmartWaiver, Wodify, Canva, Weebly, Paddle.com, Meta/Facebook ads, IRS estimated tax, EDD, Wispr, Tella, OpenPhone (Quo), Google Workspace, Square Payroll.
+
+  KEY VENDORS that are ALWAYS personal regardless of card: Amazon, Target, Walmart, Costco (groceries), Vons, Stater Bros, Albertsons, In-N-Out, Chick-fil-A, restaurants, ARCO, Chevron, Shell, Spectrum Mobile (personal), Disney+, Spotify, Apple Music, Apple.com subscriptions, Home Depot (unless clearly for gym), Dick's Sporting Goods personal, Vuori, Team Fan Shop, Fit Radio.
 - kind: 'purchase' (normal card spending), 'refund' (negative amount, returns), 'income' (negative — Exercise.com Pay deposits, Venmo Cashout), 'transfer' (Online Transfer To/From Sav, Zelle Payment To Landlord — internal moves), 'payment-to-card' (Payment Thank You-Mobile, Payment To Chase Card), 'fee' (foreign transaction fee, monthly service fee), 'interest' (PURCHASE INTEREST CHARGE)
 - memo: optional short note if useful
 

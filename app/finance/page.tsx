@@ -81,6 +81,8 @@ export default function FinancePage() {
   const [scope, setScope] = useState<FinanceScope>('all');
   const [statementParse, setStatementParse] = useState<StatementParseResult | null>(null);
   const [statementParsing, setStatementParsing] = useState(false);
+  const [parseProgress, setParseProgress] = useState<{ done: number; total: number; current: string } | null>(null);
+  const [statementRowMeta, setStatementRowMeta] = useState<{ filenames: string[]; last4s: (string | null)[] } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const statementInputRef = useRef<HTMLInputElement>(null);
 
@@ -173,23 +175,55 @@ export default function FinancePage() {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handleStatement = async (file: File) => {
+  const handleStatement = async (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
     setStatementParsing(true);
     setError(null);
+    setParseProgress({ done: 0, total: list.length, current: list[0].name });
+    const merged: StatementParseResult = {
+      filename: list.length === 1 ? list[0].name : `${list.length} statements`,
+      statement_account_last4: null,
+      statement_period_start: null,
+      statement_period_end: null,
+      transactions: [],
+    };
+    const perRowFile: string[] = [];
+    const perRowLast4: (string | null)[] = [];
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/finance/parse-statement', { method: 'POST', body: fd });
-      const body = await res.json();
-      if (!res.ok || !body.ok) {
-        setError(body.error || `parse failed (${res.status})`);
+      for (let i = 0; i < list.length; i++) {
+        const file = list[i];
+        setParseProgress({ done: i, total: list.length, current: file.name });
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch('/api/finance/parse-statement', { method: 'POST', body: fd });
+        const body = await res.json();
+        if (!res.ok || !body.ok) {
+          setError(`${file.name}: ${body.error || `parse failed (${res.status})`}`);
+          continue;
+        }
+        const parsed = body as StatementParseResult;
+        for (const t of parsed.transactions) {
+          merged.transactions.push(t);
+          perRowFile.push(file.name);
+          perRowLast4.push(parsed.statement_account_last4);
+        }
+        // Take metadata from the first successful one
+        if (!merged.statement_account_last4) merged.statement_account_last4 = parsed.statement_account_last4;
+        if (!merged.statement_period_start) merged.statement_period_start = parsed.statement_period_start;
+        if (parsed.statement_period_end) merged.statement_period_end = parsed.statement_period_end;
+      }
+      if (merged.transactions.length === 0) {
+        if (!error) setError('No transactions parsed from any file');
         return;
       }
-      setStatementParse(body as StatementParseResult);
+      setStatementParse(merged);
+      setStatementRowMeta({ filenames: perRowFile, last4s: perRowLast4 });
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setStatementParsing(false);
+      setParseProgress(null);
       if (statementInputRef.current) statementInputRef.current.value = '';
     }
   };
@@ -219,42 +253,47 @@ export default function FinancePage() {
   return (
     <Shell>
       <div className="mx-auto max-w-5xl space-y-6">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
             Finance
           </h1>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => statementInputRef.current?.click()}
               disabled={statementParsing}
-              className="min-h-9 rounded-md border border-purple-400/40 bg-purple-400/15 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-purple-300 hover:bg-purple-400/25 disabled:opacity-40"
+              className="min-h-9 rounded-md border border-purple-400/40 bg-purple-400/15 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-purple-300 hover:bg-purple-400/25 disabled:opacity-40 sm:text-[11px]"
               title="Upload a credit card or bank statement PDF — Claude parses it"
             >
-              {statementParsing ? '📄 Parsing…' : '📄 Upload Statement'}
+              {statementParsing
+                ? parseProgress
+                  ? `📄 ${parseProgress.done + 1}/${parseProgress.total}`
+                  : '📄 Parsing…'
+                : '📄 Statements'}
             </button>
             <button
               onClick={scanGmail}
               disabled={scanning}
-              className="min-h-9 rounded-md border border-sky-400/40 bg-sky-400/15 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-sky-300 hover:bg-sky-400/25 disabled:opacity-40"
+              className="min-h-9 rounded-md border border-sky-400/40 bg-sky-400/15 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-sky-300 hover:bg-sky-400/25 disabled:opacity-40 sm:text-[11px]"
               title="Pull receipts and credit card alerts from Gmail (last 72h)"
             >
-              {scanning ? '✉ Scanning…' : '✉ Scan Gmail'}
+              {scanning ? '✉ Scanning…' : '✉ Gmail'}
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
-              className="min-h-9 rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+              className="min-h-9 rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40 sm:text-[11px]"
             >
-              {uploading ? '📷 Reading…' : '📷 Snap Receipt'}
+              {uploading ? '📷 Reading…' : '📷 Snap'}
             </button>
           </div>
           <input
             ref={statementInputRef}
             type="file"
             accept="application/pdf"
+            multiple
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleStatement(f);
+              const files = e.target.files;
+              if (files && files.length > 0) handleStatement(files);
             }}
             className="hidden"
           />
@@ -316,11 +355,16 @@ export default function FinancePage() {
           <StatementReview
             result={statementParse}
             accounts={accounts}
+            rowMeta={statementRowMeta}
             onDone={async () => {
               setStatementParse(null);
+              setStatementRowMeta(null);
               await fetchAll();
             }}
-            onCancel={() => setStatementParse(null)}
+            onCancel={() => {
+              setStatementParse(null);
+              setStatementRowMeta(null);
+            }}
           />
         )}
 
@@ -358,26 +402,25 @@ export default function FinancePage() {
               return (
                 <div
                   key={t.id}
-                  className="group flex items-center gap-3 border-b border-white/[0.04] px-4 py-3 last:border-0 hover:bg-white/[0.02]"
+                  className="group flex items-center gap-2 border-b border-white/[0.04] px-3 py-3 last:border-0 hover:bg-white/[0.02] sm:gap-3 sm:px-4"
                 >
-                  <div className="num shrink-0 text-[11px] text-white/40">
+                  <div className="num shrink-0 text-[10px] text-white/40 sm:text-[11px]">
                     {new Date(t.txn_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2">
                       <span className="truncate text-sm text-white/85">{t.vendor || '(no vendor)'}</span>
                       {t.is_business && (
-                        <span className="rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-emerald-300">
+                        <span className="shrink-0 rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-emerald-300">
                           BIZ
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-white/35">
-                      {t.account && <span>{t.account.short_name || t.account.name}{t.account.last_4 ? ` ····${t.account.last_4}` : ''}</span>}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-white/35">
+                      {t.account && <span className="truncate">{t.account.short_name || t.account.name}{t.account.last_4 ? ` ····${t.account.last_4}` : ''}</span>}
                       {t.category && (
                         <span className={`rounded border px-1 py-0 text-[9px] ${tone}`}>{t.category}</span>
                       )}
-                      {t.source !== 'manual' && <span>· {t.source}</span>}
                     </div>
                   </div>
                   <div className="num shrink-0 text-sm text-white/90">${Number(t.amount).toFixed(2)}</div>
@@ -393,7 +436,7 @@ export default function FinancePage() {
                       setTransactions((prev) => prev.map((x) => (x.id === t.id ? { ...x, subscription_status: v } : x)));
                     }}
                     onClick={(e) => e.stopPropagation()}
-                    className={`shrink-0 rounded-md border px-1.5 py-1 text-[10px] outline-none ${
+                    className={`hidden shrink-0 rounded-md border px-1.5 py-1 text-[10px] outline-none sm:block ${
                       t.subscription_status === 'cancelled'
                         ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
                         : t.subscription_status === 'could_cancel'
@@ -744,19 +787,28 @@ const CATEGORY_OPTS = ['food','gas','supplements','athlete-fees','rent','softwar
 function StatementReview({
   result,
   accounts,
+  rowMeta,
   onDone,
   onCancel,
 }: {
   result: StatementParseResult;
   accounts: Account[];
+  rowMeta?: { filenames: string[]; last4s: (string | null)[] } | null;
   onDone: () => Promise<void> | void;
   onCancel: () => void;
 }) {
-  const initial = result.transactions.map((t) => ({
+  const initial = result.transactions.map((t, i) => ({
     ...t,
     include: t.kind === 'purchase' || t.kind === 'refund' || t.kind === 'fee' || t.kind === 'interest',
+    _filename: rowMeta?.filenames[i] || result.filename,
+    _last4: rowMeta?.last4s[i] || result.statement_account_last4,
   }));
   const [rows, setRows] = useState(initial);
+  const accountIdByLast4 = (last4: string | null | undefined) => {
+    if (!last4) return '';
+    const m = accounts.find((a) => a.last_4 === last4);
+    return m?.id || '';
+  };
   const [accountId, setAccountId] = useState<string>(() => {
     const last4 = result.statement_account_last4;
     if (last4) {
@@ -796,14 +848,18 @@ function StatementReview({
       source: `statement-${result.filename}`.slice(0, 80),
       transactions: rows
         .filter((r) => r.include)
-        .map((r) => ({
-          txn_date: r.txn_date,
-          amount: r.amount,
-          vendor: r.vendor,
-          category: r.category,
-          is_business: r.is_business,
-          memo: r.memo || null,
-        })),
+        .map((r) => {
+          const perRowAccount = accountIdByLast4(r._last4);
+          return {
+            txn_date: r.txn_date,
+            amount: r.amount,
+            vendor: r.vendor,
+            category: r.category,
+            is_business: r.is_business,
+            memo: r.memo || null,
+            account_id: perRowAccount || accountId || null,
+          };
+        }),
     };
     try {
       const res = await fetch('/api/transactions/bulk', {
@@ -874,8 +930,9 @@ function StatementReview({
         </div>
       </div>
 
+      {/* Desktop: table; Mobile: stacked cards */}
       <div className="max-h-[480px] overflow-y-auto rounded-md border border-white/[0.06]">
-        <table className="w-full text-[11px]">
+        <table className="hidden w-full text-[11px] sm:table">
           <thead className="sticky top-0 bg-black/80 text-[10px] uppercase tracking-[0.14em] text-white/40">
             <tr>
               <th className="px-2 py-1.5 text-left">✓</th>
@@ -933,6 +990,53 @@ function StatementReview({
             ))}
           </tbody>
         </table>
+
+        {/* Mobile: stacked card list */}
+        <ul className="divide-y divide-white/[0.04] sm:hidden">
+          {rows.map((r, i) => (
+            <li key={i} className={`flex gap-2 p-3 ${r.include ? '' : 'opacity-40'}`}>
+              <input
+                type="checkbox"
+                checked={r.include}
+                onChange={(e) => update(i, { include: e.target.checked })}
+                className="mt-1 size-4 shrink-0"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <input
+                    value={r.vendor}
+                    onChange={(e) => update(i, { vendor: e.target.value })}
+                    className="min-w-0 flex-1 truncate rounded border border-transparent bg-transparent px-1 text-sm text-white/85 outline-none focus:border-white/15 focus:bg-black/40"
+                  />
+                  <span className={`num shrink-0 text-sm ${r.amount < 0 ? 'text-emerald-300' : 'text-white/85'}`}>
+                    ${Math.abs(r.amount).toFixed(2)}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                  <span className="num text-white/40">{r.txn_date.slice(5)}</span>
+                  <span className={`uppercase tracking-[0.14em] ${KIND_TONE[r.kind]}`}>{r.kind}</span>
+                  <select
+                    value={r.category}
+                    onChange={(e) => update(i, { category: e.target.value })}
+                    className="rounded border border-white/10 bg-black/40 px-1 py-0.5 text-[10px] text-white/85 outline-none"
+                  >
+                    {CATEGORY_OPTS.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <label className="ml-auto flex items-center gap-1 text-white/55">
+                    <input
+                      type="checkbox"
+                      checked={r.is_business}
+                      onChange={(e) => update(i, { is_business: e.target.checked })}
+                    />
+                    biz
+                  </label>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-2">
