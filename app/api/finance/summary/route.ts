@@ -34,18 +34,23 @@ function pickPct(value: string | null, fallback: number): number {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const months = Math.min(Math.max(Number(searchParams.get('months') || 12), 1), 24);
+  const scopeParam = (searchParams.get('scope') || 'all').toLowerCase();
+  const scope: 'personal' | 'business' | 'all' =
+    scopeParam === 'personal' ? 'personal' : scopeParam === 'business' ? 'business' : 'all';
 
   const since = new Date();
   since.setMonth(since.getMonth() - months);
   since.setDate(1);
 
-  const { data: txns, error } = await supabase
+  let query = supabase
     .from('transactions')
     .select('id, txn_date, amount, vendor, category, is_business, account_id, needs_review, subscription_status')
     .eq('user_id', USER_ID)
     .eq('needs_review', false)
-    .gte('txn_date', since.toISOString().slice(0, 10))
-    .order('txn_date', { ascending: false });
+    .gte('txn_date', since.toISOString().slice(0, 10));
+  if (scope === 'personal') query = query.eq('is_business', false);
+  else if (scope === 'business') query = query.eq('is_business', true);
+  const { data: txns, error } = await query.order('txn_date', { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const { data: budgets } = await supabase
@@ -269,6 +274,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     months,
+    scope,
     totals_by_month,
     savings_tracker,
     budgets: budgets_status,

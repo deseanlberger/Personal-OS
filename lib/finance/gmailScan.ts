@@ -80,14 +80,39 @@ async function getAccessToken(): Promise<string> {
 }
 
 async function listCandidateMessages(accessToken: string, sinceHours: number): Promise<GmailMessageMeta[]> {
-  // Heuristic query: receipt-shaped subjects from the last N hours.
-  // newer_than:Nd is supported by Gmail search; convert to days.
+  // Heuristic query: receipt-shaped subjects AND credit-card charge alerts
+  // from the last N hours. newer_than:Nd is supported by Gmail search.
   const days = Math.max(1, Math.ceil(sinceHours / 24));
-  const query = encodeURIComponent(
-    `(subject:receipt OR subject:invoice OR subject:order OR subject:"thanks for your order" OR subject:"payment received" OR from:no-reply OR from:noreply) newer_than:${days}d`,
-  );
+  const subjectTerms = [
+    'subject:receipt',
+    'subject:invoice',
+    'subject:order',
+    'subject:"thanks for your order"',
+    'subject:"payment received"',
+    'subject:"transaction alert"',
+    'subject:"transaction on"',
+    'subject:"card was used"',
+    'subject:"purchase alert"',
+    'subject:"large purchase"',
+    'subject:"new charge"',
+    'subject:"charge approved"',
+  ].join(' OR ');
+  const senderTerms = [
+    'from:no-reply',
+    'from:noreply',
+    'from:alerts@chase.com',
+    'from:alerts@discover.com',
+    'from:notify@discover.com',
+    'from:secure@bankofamerica.com',
+    'from:alerts@notify.wellsfargo.com',
+    'from:no.reply.alerts@chase.com',
+    'from:capitalone.com',
+    'from:americanexpress.com',
+    'from:citi.com',
+  ].join(' OR ');
+  const query = encodeURIComponent(`(${subjectTerms} OR ${senderTerms}) newer_than:${days}d`);
   const res = await fetch(
-    `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=50&q=${query}`,
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=80&q=${query}`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
   if (!res.ok) throw new Error(`Gmail list failed: ${res.status}`);
@@ -156,10 +181,17 @@ Output JSON ONLY:
 }
 
 Rules:
+- is_receipt=true for: merchant receipts/order confirmations AND credit-card
+  charge alerts (e.g. "A transaction of $24.99 at Trader Joe's was approved").
+  These represent real spending and should land in the ledger.
 - is_receipt=false if this is a shipping update, password reset, marketing,
-  newsletter, or anything else that isn't a payment/receipt.
-- amount = order total (not shipping or tax line items).
-- txn_date from receipt date; if missing, leave null.`;
+  newsletter, statement notification ("your statement is ready"), monthly
+  summary, payment due reminder, or anything that isn't a single
+  payment/charge event.
+- amount = single charge amount (not statement balance or shipping/tax lines).
+- txn_date from the charge/receipt date; if missing, leave null.
+- vendor = the merchant where the money was spent, NOT the bank/card issuer.
+  e.g. for "Chase alert: $20 at Shell", vendor is "Shell" not "Chase".`;
   try {
     const msg = await claudeClient().messages.create({
       model: claudeModel(),
