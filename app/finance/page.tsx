@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Shell } from '@/components/dashboard/Shell';
+import { FinanceDashboard } from '@/components/dashboard/FinanceDashboard';
 
 type Account = {
   id: string;
@@ -147,26 +148,12 @@ export default function FinancePage() {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Aggregates for the strip at the top
-  const totals30d = transactions.reduce(
-    (a, t) => {
-      const amt = Number(t.amount) || 0;
-      if (amt > 0) {
-        a.spent += amt;
-        if (t.is_business) a.business += amt;
-        else a.personal += amt;
-      }
-      return a;
-    },
-    { spent: 0, personal: 0, business: 0 },
-  );
-
   return (
     <Shell>
       <div className="mx-auto max-w-5xl space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
-            Finance // Last 30d
+            Finance
           </h1>
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -190,23 +177,8 @@ export default function FinancePage() {
 
         {error && <div className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-300">⚠ {error}</div>}
 
-        {/* Top stats */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-            <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Total spent</div>
-            <div className="num mt-1 text-2xl text-white/90">${totals30d.spent.toFixed(2)}</div>
-            <div className="mt-1 text-[10px] text-white/30">last 30 days · {transactions.length} txns</div>
-          </div>
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-            <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Personal</div>
-            <div className="num mt-1 text-2xl text-white/90">${totals30d.personal.toFixed(2)}</div>
-          </div>
-          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-            <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Business</div>
-            <div className="num mt-1 text-2xl text-emerald-300/90">${totals30d.business.toFixed(2)}</div>
-            <div className="mt-1 text-[10px] text-white/30">tax write-off pool</div>
-          </div>
-        </div>
+        {/* KJ-inspired dashboard: monthly tabs / 4 cards / donut / transfers / month-over-month / subscriptions */}
+        <FinanceDashboard refreshKey={transactions.length} />
 
         {/* Pending parsed receipt */}
         {pendingParse && (
