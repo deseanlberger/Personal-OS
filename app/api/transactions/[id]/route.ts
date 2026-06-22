@@ -6,7 +6,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: 'body required' }, { status: 400 });
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  for (const f of ['account_id', 'txn_date', 'amount', 'vendor', 'category', 'memo', 'is_business']) {
+  for (const f of ['account_id', 'txn_date', 'amount', 'vendor', 'category', 'memo', 'is_business', 'needs_review']) {
     if (f in body) patch[f] = body[f];
   }
   const { data, error } = await supabase.from('transactions').update(patch).eq('id', id).select('*, account:accounts(id,name,short_name,last_4,category,type)').single();

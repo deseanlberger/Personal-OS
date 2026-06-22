@@ -10,6 +10,7 @@ import {
 } from '@/lib/telegram/api';
 import { transcribeAudio } from '@/lib/llm/whisper';
 import { estimateMacrosFromImage } from '@/lib/nutrition/estimator';
+import { classifyPhotoKind, parseReceiptFromImage } from '@/lib/finance/receiptParser';
 import { localDateKey } from '@/lib/habits/date';
 import { recalcWeek } from '@/lib/blocks/recalc';
 
@@ -80,9 +81,9 @@ export async function POST(req: NextRequest) {
 async function handleMessage(msg: NonNullable<TelegramUpdate['message']>): Promise<void> {
   const chatId = msg.chat.id;
 
-  // PHOTO path → estimate macros + log as a meal
+  // PHOTO path → classify (food vs receipt) then route to the right parser.
   if (msg.photo && msg.photo.length > 0) {
-    await handleFoodPhoto(msg);
+    await handlePhoto(msg);
     return;
   }
 
@@ -159,23 +160,116 @@ type Classification = {
 
 const USER_ID = process.env.USER_ID || 'desean';
 
-async function handleFoodPhoto(msg: NonNullable<TelegramUpdate['message']>): Promise<void> {
-  const chatId = msg.chat.id;
-  // Pick the largest photo size for best classification
+/**
+ * Downloads the largest photo size and converts to a base64 data URI suitable
+ * for OpenAI vision endpoints. Returns null on failure.
+ */
+async function downloadPhotoAsDataUri(
+  msg: NonNullable<TelegramUpdate['message']>,
+): Promise<string | null> {
   const photo = msg.photo![msg.photo!.length - 1];
   const dl = await downloadFile(photo.file_id);
-  if (!dl) {
-    await sendMessage(chatId, 'Apologies, sir — could not download the photo.');
-    return;
-  }
-  // Convert ArrayBuffer → base64 → data URI for OpenAI vision
+  if (!dl) return null;
   const bytes = new Uint8Array(dl.bytes);
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   const b64 = btoa(bin);
   const ext = dl.path.split('.').pop()?.toLowerCase() || 'jpg';
   const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-  const dataUri = `data:${mime};base64,${b64}`;
+  return `data:${mime};base64,${b64}`;
+}
+
+/** Routes a photo to either receipt or food parsing based on a quick vision classification. */
+async function handlePhoto(msg: NonNullable<TelegramUpdate['message']>): Promise<void> {
+  const chatId = msg.chat.id;
+  const dataUri = await downloadPhotoAsDataUri(msg);
+  if (!dataUri) {
+    await sendMessage(chatId, 'Apologies, sir — could not download the photo.');
+    return;
+  }
+
+  // Caption can force a route (e.g. "receipt" / "food").
+  const caption = (msg.caption || '').toLowerCase();
+  let kind: 'receipt' | 'food' | 'other';
+  if (caption.includes('receipt') || caption.includes('bill') || caption.includes('invoice')) {
+    kind = 'receipt';
+  } else if (caption.includes('food') || caption.includes('meal') || caption.includes('eat')) {
+    kind = 'food';
+  } else {
+    kind = await classifyPhotoKind(dataUri);
+  }
+
+  if (kind === 'receipt') {
+    await handleReceiptPhoto(msg, dataUri);
+  } else if (kind === 'food') {
+    await handleFoodPhoto(msg, dataUri);
+  } else {
+    await sendMessage(
+      chatId,
+      'I could not tell what this photo is, sir. Try a clearer shot of a receipt or meal — or add a caption.',
+      { reply_to_message_id: msg.message_id },
+    );
+  }
+}
+
+async function handleReceiptPhoto(
+  msg: NonNullable<TelegramUpdate['message']>,
+  dataUri: string,
+): Promise<void> {
+  const chatId = msg.chat.id;
+  const parsed = await parseReceiptFromImage(dataUri);
+  if (!parsed) {
+    await sendMessage(
+      chatId,
+      'Apologies, sir — I could not parse that receipt. Try a clearer shot.',
+      { reply_to_message_id: msg.message_id },
+    );
+    return;
+  }
+
+  const { error } = await supabase.from('transactions').insert({
+    user_id: USER_ID,
+    txn_date: parsed.txn_date,
+    amount: parsed.amount,
+    vendor: parsed.vendor,
+    category: parsed.category || null,
+    memo: parsed.memo || null,
+    is_business: parsed.is_business_likely ?? false,
+    source: 'photo',
+    raw_parse: parsed as unknown as Record<string, unknown>,
+    needs_review: true,
+  });
+
+  if (error) {
+    console.error('[telegram.handleReceiptPhoto] insert failed:', error.message);
+    await sendMessage(
+      chatId,
+      `Apologies, sir — the receipt parsed but failed to save: ${error.message}`,
+      { reply_to_message_id: msg.message_id },
+    );
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    `*Receipt logged, sir.*\n${parsed.vendor} — *$${parsed.amount.toFixed(2)}* · ${parsed.txn_date}${parsed.category ? `\n_${parsed.category}_` : ''}\n\nReview + assign account on /finance.`,
+    { reply_to_message_id: msg.message_id },
+  );
+}
+
+async function handleFoodPhoto(
+  msg: NonNullable<TelegramUpdate['message']>,
+  preFetchedDataUri?: string,
+): Promise<void> {
+  const chatId = msg.chat.id;
+  let dataUri = preFetchedDataUri ?? null;
+  if (!dataUri) {
+    dataUri = await downloadPhotoAsDataUri(msg);
+    if (!dataUri) {
+      await sendMessage(chatId, 'Apologies, sir — could not download the photo.');
+      return;
+    }
+  }
 
   const macro = await estimateMacrosFromImage(dataUri);
   if (!macro) {

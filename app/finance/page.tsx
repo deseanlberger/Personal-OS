@@ -24,6 +24,7 @@ type Transaction = {
   is_business: boolean;
   source: string;
   receipt_image_url: string | null;
+  needs_review?: boolean;
 };
 
 type ParsedReceipt = {
@@ -126,6 +127,8 @@ export default function FinancePage() {
         is_business: pendingParse.is_business_likely ?? false,
         source: 'photo',
         raw_parse: pendingParse,
+        // User just confirmed in the modal, so persist as already-reviewed
+        needs_review: false,
         ...override,
       }),
     });
@@ -223,6 +226,9 @@ export default function FinancePage() {
           </div>
         )}
 
+        {/* Pending review */}
+        <PendingReviewSection accounts={accounts} onChange={fetchAll} />
+
         {/* Transaction list */}
         <section>
           <h2 className="mb-2 text-[10px] uppercase tracking-[0.18em] text-white/50">Transactions</h2>
@@ -274,6 +280,223 @@ export default function FinancePage() {
         </section>
       </div>
     </Shell>
+  );
+}
+
+const CATEGORY_OPTIONS = [
+  'food',
+  'gas',
+  'supplements',
+  'athlete-fees',
+  'rent',
+  'software',
+  'travel',
+  'gym-equipment',
+  'office',
+  'medical',
+  'other',
+];
+
+function PendingReviewSection({
+  accounts,
+  onChange,
+}: {
+  accounts: Account[];
+  onChange: () => Promise<void> | void;
+}) {
+  const [pending, setPending] = useState<Transaction[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchPending = useCallback(async () => {
+    try {
+      const res = await fetch('/api/transactions?status=pending&days=180', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`pending ${res.status}`);
+      const body = await res.json();
+      setPending(body.transactions || []);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPending();
+  }, [fetchPending]);
+
+  const approve = async (t: Transaction, patch: Partial<Transaction>) => {
+    const res = await fetch(`/api/transactions/${t.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...patch, needs_review: false }),
+    });
+    if (res.ok) {
+      await Promise.all([fetchPending(), onChange()]);
+    }
+  };
+
+  const reject = async (id: string) => {
+    if (!confirm('Discard this pending receipt?')) return;
+    await fetch(`/api/transactions/${id}`, { method: 'DELETE' });
+    await Promise.all([fetchPending(), onChange()]);
+  };
+
+  if (error) {
+    return (
+      <section className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-300">
+        Pending review failed: {error}
+      </section>
+    );
+  }
+  if (pending.length === 0) return null;
+
+  return (
+    <section>
+      <h2 className="mb-2 text-[10px] uppercase tracking-[0.18em] text-amber-300/85">
+        Pending Review · {pending.length}
+      </h2>
+      <div className="space-y-2">
+        {pending.map((t) => (
+          <PendingReviewRow
+            key={t.id}
+            transaction={t}
+            accounts={accounts}
+            onApprove={(patch) => approve(t, patch)}
+            onReject={() => reject(t.id)}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PendingReviewRow({
+  transaction,
+  accounts,
+  onApprove,
+  onReject,
+}: {
+  transaction: Transaction;
+  accounts: Account[];
+  onApprove: (patch: Partial<Transaction>) => Promise<void>;
+  onReject: () => Promise<void>;
+}) {
+  // Vendor-based suggestion: pre-fill from the latest confirmed transaction
+  // for the same vendor if we find one. Loose match, falls back to current values.
+  const [accountId, setAccountId] = useState<string>(transaction.account_id || accounts[0]?.id || '');
+  const [category, setCategory] = useState<string>(transaction.category || 'other');
+  const [isBusiness, setIsBusiness] = useState<boolean>(transaction.is_business);
+  const [pending, setPending] = useState(false);
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!transaction.vendor) return;
+    let cancelled = false;
+    fetch(`/api/transactions?status=confirmed&days=365`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((body) => {
+        if (cancelled) return;
+        const vendor = transaction.vendor!.toLowerCase();
+        const match = (body.transactions as Transaction[]).find(
+          (x) => x.vendor?.toLowerCase() === vendor && x.id !== transaction.id,
+        );
+        if (match) {
+          if (!transaction.account_id && match.account_id) setAccountId(match.account_id);
+          if (!transaction.category && match.category) setCategory(match.category);
+          if (!transaction.is_business && match.is_business) setIsBusiness(true);
+          setSuggestion(
+            `Past ${vendor}: ${match.category || 'other'} · ${match.is_business ? 'business' : 'personal'}`,
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [transaction]);
+
+  const submit = async () => {
+    setPending(true);
+    await onApprove({ account_id: accountId || null, category, is_business: isBusiness });
+    setPending(false);
+  };
+
+  return (
+    <div className="rounded-xl border border-amber-300/30 bg-amber-300/[0.04] p-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="truncate text-sm text-white/90">{transaction.vendor || '(no vendor)'}</span>
+            <span className="num text-sm text-amber-300">${Number(transaction.amount).toFixed(2)}</span>
+          </div>
+          <div className="mt-0.5 num text-[10px] uppercase tracking-[0.18em] text-white/40">
+            {transaction.txn_date} · {transaction.source}
+          </div>
+          {transaction.memo && <div className="mt-0.5 text-[11px] italic text-white/55">{transaction.memo}</div>}
+        </div>
+      </div>
+
+      {suggestion && (
+        <div className="mt-2 text-[10px] uppercase tracking-[0.14em] text-emerald-300/70">
+          → suggested from history: {suggestion}
+        </div>
+      )}
+
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <select
+          value={accountId}
+          onChange={(e) => setAccountId(e.target.value)}
+          className="rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-[12px] text-white/85 outline-none"
+        >
+          <option value="">— account —</option>
+          {accounts.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.short_name || a.name}{a.last_4 ? ` ····${a.last_4}` : ''}
+            </option>
+          ))}
+        </select>
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-[12px] text-white/85 outline-none"
+        >
+          {CATEGORY_OPTIONS.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <div className="flex items-center rounded-md border border-white/10 bg-black/30 p-0.5">
+          {(['personal', 'business'] as const).map((c) => {
+            const active = (c === 'business') === isBusiness;
+            return (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setIsBusiness(c === 'business')}
+                className={`flex-1 rounded px-2 py-1 text-[11px] uppercase tracking-[0.18em] transition ${
+                  active ? 'bg-emerald-400/20 text-emerald-300' : 'text-white/40 hover:text-white/70'
+                }`}
+              >
+                {c}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-3 flex justify-end gap-2">
+        <button onClick={onReject} className="rounded-md border border-white/10 px-3 py-1.5 text-[11px] text-white/55 hover:bg-white/[0.04]">
+          Discard
+        </button>
+        <button
+          onClick={submit}
+          disabled={pending}
+          className="rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-1.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+        >
+          {pending ? 'Approving…' : 'Approve'}
+        </button>
+      </div>
+    </div>
   );
 }
 
