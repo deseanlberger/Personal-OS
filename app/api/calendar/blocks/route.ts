@@ -66,7 +66,45 @@ export async function GET(req: NextRequest) {
     type: b.type,
     energy: b.energy ?? null,
     locked: !!b.locked,
+    is_override: false as const,
+    override_id: null as string | null,
     assigned_tasks: byBlock.get(blockId(b)) || [],
+  }));
+
+  // Layer in any date-specific overrides for this week (Mon-Sun)
+  const weekEnd = new Date(targetMonday);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const weekStartIso = targetMonday.toISOString().slice(0, 10);
+  const weekEndIso = weekEnd.toISOString().slice(0, 10);
+
+  const { data: overrides } = await supabase
+    .from('block_overrides')
+    .select('id, override_date, start_time, end_time, name, type, energy, locked')
+    .eq('user_id', USER_ID)
+    .gte('override_date', weekStartIso)
+    .lte('override_date', weekEndIso);
+
+  for (const ov of overrides || []) {
+    const d = new Date(ov.override_date + 'T00:00:00');
+    const day = d.getDay(); // 0 Sun..6 Sat
+    rendered.push({
+      id: `OVR-${ov.id}`,
+      day,
+      start: ov.start_time,
+      end: ov.end_time,
+      name: ov.name,
+      type: ov.type,
+      energy: ov.energy ?? null,
+      locked: !!ov.locked,
+      is_override: false as const, // narrow — actual override marker below
+      override_id: ov.id,
+      assigned_tasks: [],
+    } as (typeof rendered)[number]);
+  }
+  // Mark override rows for the client (TS doesn't let us mix the literal types nicely)
+  const renderedFinal = rendered.map((b) => ({
+    ...b,
+    is_override: b.override_id !== null,
   }));
 
   return NextResponse.json({
@@ -74,6 +112,6 @@ export async function GET(req: NextRequest) {
     weekOffset,
     weekStart: targetMonday.toISOString().slice(0, 10),
     isCurrentWeek: weekOffset === 0,
-    blocks: rendered,
+    blocks: renderedFinal,
   });
 }

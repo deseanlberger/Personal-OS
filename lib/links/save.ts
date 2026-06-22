@@ -69,15 +69,114 @@ function decodeHtml(s: string | null): string | null {
     .replace(/&nbsp;/g, ' ');
 }
 
-export async function fetchUrlMetadata(url: string): Promise<Metadata> {
+function extractYouTubeId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.hostname.endsWith('youtu.be')) return u.pathname.slice(1).split('/')[0] || null;
+    if (u.hostname.endsWith('youtube.com')) {
+      const v = u.searchParams.get('v');
+      if (v) return v;
+      const m = u.pathname.match(/\/(?:embed|shorts|v|live)\/([^/?#]+)/);
+      if (m) return m[1];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** YouTube has an oEmbed endpoint that returns title + author + thumbnail without an API key. */
+async function fetchYouTubeOEmbed(url: string): Promise<{ title: string | null; author: string | null; thumbnail: string | null }> {
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+      { signal: AbortSignal.timeout(6000) },
+    );
+    if (!res.ok) return { title: null, author: null, thumbnail: null };
+    const body = (await res.json()) as { title?: string; author_name?: string; thumbnail_url?: string };
+    return {
+      title: body.title || null,
+      author: body.author_name || null,
+      thumbnail: body.thumbnail_url || null,
+    };
+  } catch {
+    return { title: null, author: null, thumbnail: null };
+  }
+}
+
+/** Pulls YouTube's auto-captioned transcript via the public timedtext endpoint. Returns empty string on failure. */
+async function fetchYouTubeTranscript(videoId: string): Promise<string> {
+  // Try direct English captions first
+  for (const lang of ['en', 'en-US', 'en-GB']) {
+    try {
+      const res = await fetch(
+        `https://video.google.com/timedtext?lang=${lang}&v=${videoId}&fmt=json3`,
+        { signal: AbortSignal.timeout(6000) },
+      );
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (!text) continue;
+      try {
+        const j = JSON.parse(text) as { events?: { segs?: { utf8?: string }[] }[] };
+        if (!j.events) continue;
+        const out: string[] = [];
+        for (const e of j.events) {
+          if (!e.segs) continue;
+          for (const s of e.segs) {
+            if (s.utf8) out.push(s.utf8);
+          }
+        }
+        const joined = out.join(' ').replace(/\s+/g, ' ').trim();
+        if (joined.length > 50) return joined.slice(0, 8000);
+      } catch {
+        // Not JSON — try next lang
+      }
+    } catch {
+      // Network failed — try next lang
+    }
+  }
+  return '';
+}
+
+export async function fetchUrlMetadata(url: string): Promise<Metadata & { transcript?: string }> {
   const domain = domainOf(url);
   const source_kind = inferKind(url);
-  const meta: Metadata = { title: null, description: null, thumbnail_url: null, domain, source_kind };
+  const meta: Metadata & { transcript?: string } = {
+    title: null,
+    description: null,
+    thumbnail_url: null,
+    domain,
+    source_kind,
+  };
+
+  // YouTube short-circuit: oEmbed is reliable + we can grab the transcript
+  if (source_kind === 'youtube') {
+    const videoId = extractYouTubeId(url);
+    if (videoId) {
+      const [oembed, transcript] = await Promise.all([
+        fetchYouTubeOEmbed(url),
+        fetchYouTubeTranscript(videoId),
+      ]);
+      meta.title = oembed.title;
+      meta.thumbnail_url = oembed.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      meta.description = oembed.author ? `by ${oembed.author}` : null;
+      if (transcript) {
+        meta.transcript = transcript;
+        // Prefer the first ~280 chars of transcript over the author byline so the
+        // /library card actually says what the video is about.
+        meta.description = transcript.slice(0, 280).trim() + (transcript.length > 280 ? '…' : '');
+      }
+      return meta;
+    }
+  }
+
   try {
     const res = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; PersonalOS-Bot/1.0; +https://personal-os-woad.vercel.app)',
+        // Some sites give nothing to bot UAs — pretend to be a regular browser
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
       redirect: 'follow',
       signal: AbortSignal.timeout(8000),
@@ -101,7 +200,7 @@ export async function fetchUrlMetadata(url: string): Promise<Metadata> {
   return meta;
 }
 
-async function classifyLink(meta: Metadata, url: string): Promise<{
+async function classifyLink(meta: Metadata & { transcript?: string }, url: string): Promise<{
   summary: string;
   category: string;
   tags: string[];
@@ -112,22 +211,27 @@ async function classifyLink(meta: Metadata, url: string): Promise<{
     tags: [meta.source_kind] as string[],
   };
   if (!claudeAvailable()) return fallback;
+  const transcriptBlock = meta.transcript
+    ? `\nTranscript (auto-captioned, first 4000 chars):\n${meta.transcript.slice(0, 4000)}\n`
+    : '';
   const prompt = `Classify this link Desean saved.
 
 URL: ${url}
 Domain: ${meta.domain}
 Source: ${meta.source_kind}
 Title: ${meta.title || '(none)'}
-Description: ${meta.description?.slice(0, 400) || '(none)'}
+Description: ${meta.description?.slice(0, 400) || '(none)'}${transcriptBlock}
 
 Output JSON ONLY:
 {
-  "summary": "one-line plain-English summary under 200 chars",
+  "summary": "one-line plain-English summary of what this link actually teaches/contains, under 200 chars. Be concrete — say what the video/article is *about*, not just its title.",
   "category": "one of: training, programming, business, marketing, finance, athletes, recipes, tech, education, personal, other",
   "tags": ["kebab-case", "tags", "max 5"]
 }
 
-Categories favor Desean's life: he's a head coach (training/athletes), runs a coaching business, codes side projects, manages personal finances. Bias picks toward those when relevant.`;
+Categories favor Desean's life: he's a head coach (training/athletes), runs a coaching business, codes side projects, manages personal finances. Bias picks toward those when relevant.${
+    transcriptBlock ? '\nWhen a transcript is provided, base the summary on the actual content, not just the title.' : ''
+  }`;
   try {
     const msg = await claudeClient().messages.create({
       model: claudeModel(),
@@ -184,9 +288,10 @@ export async function saveLink(url: string): Promise<SavedLink | null> {
     return null;
   }
 
-  // Best-effort embedding for /brain search.
+  // Best-effort embedding for /brain search. Includes transcript when present
+  // so /brain semantic search can match against video contents, not just titles.
   try {
-    const blob = `${cls.summary}\n\n${meta.title || ''}\n${meta.description || ''}\n${cls.tags.join(' ')}`.slice(0, 4000);
+    const blob = `${cls.summary}\n\n${meta.title || ''}\n${meta.description || ''}\n${cls.tags.join(' ')}\n${meta.transcript || ''}`.slice(0, 6000);
     const vec = await embed(blob);
     if (vec && data?.id) {
       await supabase.from('memory_chunks').insert({
