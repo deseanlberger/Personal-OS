@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { localDateKey } from '@/lib/habits/date';
 import { DAILY_TARGETS } from '@/lib/nutrition/targets';
+import { DAILY_MEAL_PLAN, PLAN_TOTALS } from '@/lib/nutrition/mealPlan';
 
 type Meal = {
   id: string;
@@ -34,6 +35,7 @@ export function NutritionCard() {
   const [estimating, setEstimating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loggingPlan, setLoggingPlan] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Date rollover
@@ -96,6 +98,25 @@ export function NutritionCard() {
       setMeals(body.meals || []);
     } else {
       setError(`save ${res.status}`);
+    }
+  };
+
+  const logDailyPlan = async () => {
+    if (loggingPlan) return;
+    const alreadyLogged = meals.some((m) => m.source === 'plan');
+    if (alreadyLogged && !confirm('Today already has plan meals logged. Add the full plan again?')) {
+      return;
+    }
+    setLoggingPlan(true);
+    setError(null);
+    try {
+      for (const m of DAILY_MEAL_PLAN) {
+        await addMeal({ ...m, source: 'plan' });
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoggingPlan(false);
     }
   };
 
@@ -214,8 +235,27 @@ export function NutritionCard() {
         })}
       </div>
 
+      {/* Quick: log the prepped daily meal plan in one tap */}
+      <button
+        type="button"
+        onClick={logDailyPlan}
+        disabled={loggingPlan}
+        className="mt-4 flex w-full items-center justify-between rounded-md border border-emerald-400/30 bg-emerald-400/[0.06] px-3 py-2 text-left hover:bg-emerald-400/[0.12] disabled:opacity-40"
+        title={`Logs your prepped plan: ${PLAN_TOTALS.kcal} kcal · ${PLAN_TOTALS.p}p · ${PLAN_TOTALS.c}c · ${PLAN_TOTALS.f}f`}
+      >
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-300">
+            {loggingPlan ? 'Logging plan…' : 'Log today’s plan'}
+          </div>
+          <div className="num mt-0.5 text-[10px] text-white/40">
+            {DAILY_MEAL_PLAN.length} meals · {PLAN_TOTALS.kcal} kcal · {PLAN_TOTALS.p}p
+          </div>
+        </div>
+        <span className="text-[11px] text-emerald-300/70">+</span>
+      </button>
+
       {/* Add by text */}
-      <form onSubmit={estimateAndAdd} className="mt-4 flex items-center gap-2 rounded-md border border-white/10 bg-black/30 px-3 py-2">
+      <form onSubmit={estimateAndAdd} className="mt-3 flex items-center gap-2 rounded-md border border-white/10 bg-black/30 px-3 py-2">
         <span className="text-white/30">+</span>
         <input
           value={input}
