@@ -34,7 +34,7 @@ For each transaction, output JSON with:
 - is_business: TRUE if it's a coaching/training/business expense. FALSE for personal.
 
   CARD DEFAULTS (use these to bias your decision; flip per-row only when the vendor strongly suggests otherwise):
-  - Card ending 4316 (Chase Freedom): BUSINESS CARD — default is_business=true. Flip to false only for clear personal vendors (Amazon, Target, restaurants, groceries, gas, Spectrum personal mobile, Disney, Spotify, Apple Music, Fit Radio personal, etc).
+  - Card ending 4316 (Chase Freedom): BUSINESS RECURRING / SUBSCRIPTIONS card — default is_business=true for ALL charges. This card is dedicated to business software subscriptions (Exercise.com, HighLevel, Train Heroic, Zapier, Anthropic, ElevenLabs, Recall, Riverside.fm, SmartWaiver, Output Sports recurring). Flip to false ONLY for unambiguously personal vendors that slipped onto this card by accident (clear groceries, restaurants, personal Amazon orders). When in doubt on 4316 → mark business.
   - Card ending 2860 (Chase Freedom Unlimited): PERSONAL CARD — default is_business=false. Flip to true only for clear business vendors (Exercise.com, HighLevel, Output Sports, VALD, Train Heroic, Zapier, Anthropic, ElevenLabs, Recall, Riverside.fm, SmartWaiver, Google Workspace, Staples).
   - Apple Card: PERSONAL CARD — default is_business=false. Apple.com subscriptions are personal unless clearly business (e.g. Ring AI Pro for work transcription = business).
   - Card ending 1160 (USAA): BUSINESS CARD — default is_business=true. Flip to false for clear personal (Walmart, restaurants, Bier Garden, Vuori clothing, Spectrum personal, LAZ Parking when not for a work trip, Monarch Money personal finance).
