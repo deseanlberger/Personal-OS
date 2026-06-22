@@ -71,6 +71,17 @@ export const DEFAULT_HABITS: HabitDef[] = [
     unit: 'min',
     sub: '2hr/week · +30 per tap',
   },
+  {
+    id: 'chest-workout',
+    label: 'Chest sesh',
+    category: 'body',
+    cadence: 'weekly',
+    measure: 'count',
+    target: 3,
+    step: 1,
+    unit: 'days',
+    sub: '3×/week · bench 5×10 + DB bench 5×10 + cable fly 4×12',
+  },
 ];
 
 export const CATEGORY_TONE: Record<HabitCategory, string> = {
