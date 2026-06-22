@@ -47,6 +47,7 @@ export function CalendarCard() {
   const [selectedDay, setSelectedDay] = useState<number>(() => new Date().getDay());
   const [weekOffset, setWeekOffset] = useState(0);
   const [recalcStatus, setRecalcStatus] = useState<'idle' | 'pending' | 'done' | 'error'>('idle');
+  const [recalcSummary, setRecalcSummary] = useState<string | null>(null);
   const userSelectedRef = useRef(false);
 
   const fetchBlocks = useCallback(async (offset: number) => {
@@ -101,15 +102,31 @@ export function CalendarCard() {
 
   const recalc = async () => {
     setRecalcStatus('pending');
+    setRecalcSummary(null);
     try {
-      const res = await fetch('/api/calendar/recalc', { method: 'POST' });
-      if (!res.ok) throw new Error(`recalc ${res.status}`);
-      // Recalc always targets the current week — jump back if user wandered
+      // Use the meta-refresh endpoint: it classifies any uncategorized
+      // tasks first, then runs recalcWeek().
+      const res = await fetch('/api/tasks/refresh-week', { method: 'POST' });
+      if (!res.ok) throw new Error(`refresh ${res.status}`);
+      const body = (await res.json()) as {
+        classified?: number;
+        assigned?: number;
+        skipped?: number;
+      };
+      // Refresh always targets the current week — jump back if user wandered
       setWeekOffset(0);
       await fetchBlocks(0);
       emit(EVENTS.TASK_CHANGED);
       setRecalcStatus('done');
-      setTimeout(() => setRecalcStatus('idle'), 2000);
+      const parts: string[] = [];
+      if (body.classified) parts.push(`${body.classified} classified`);
+      if (typeof body.assigned === 'number') parts.push(`${body.assigned} assigned`);
+      if (body.skipped) parts.push(`${body.skipped} skipped`);
+      setRecalcSummary(parts.length ? `✓ ${parts.join(' · ')}` : '✓ Refreshed');
+      setTimeout(() => {
+        setRecalcStatus('idle');
+        setRecalcSummary(null);
+      }, 4000);
     } catch {
       setRecalcStatus('error');
       setTimeout(() => setRecalcStatus('idle'), 2500);
@@ -260,6 +277,7 @@ export function CalendarCard() {
         <button
           onClick={recalc}
           disabled={recalcStatus === 'pending'}
+          title={data?.isCurrentWeek ? 'Classify any new tasks + refresh this week' : 'Refresh the current week (jumps back)'}
           className={`min-h-9 rounded-md border px-2 py-1 transition disabled:opacity-40 ${
             recalcStatus === 'done'
               ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
@@ -267,9 +285,14 @@ export function CalendarCard() {
                 ? 'border-red-400/40 bg-red-400/10 text-red-300'
                 : 'border-white/10 text-white/60 hover:bg-white/[0.04]'
           }`}
-          title={data?.isCurrentWeek ? 'Recalc this week' : 'Recalc the current week (jumps back)'}
         >
-          {recalcStatus === 'pending' ? 'Recalc…' : recalcStatus === 'done' ? '✓ Recalc' : recalcStatus === 'error' ? '⚠ Recalc' : 'Recalc'}
+          {recalcStatus === 'pending'
+            ? 'Refreshing…'
+            : recalcStatus === 'done'
+              ? recalcSummary || '✓ Refreshed'
+              : recalcStatus === 'error'
+                ? '⚠ Refresh'
+                : 'Refresh Week'}
         </button>
       </div>
 
