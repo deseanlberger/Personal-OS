@@ -56,6 +56,7 @@ export default function FinancePage() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [pendingParse, setPendingParse] = useState<ParsedReceipt | null>(null);
+  const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAll = useCallback(async () => {
@@ -147,6 +148,22 @@ export default function FinancePage() {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const saveEdit = async (patch: Partial<Transaction>) => {
+    if (!editingTxn) return;
+    const res = await fetch(`/api/transactions/${editingTxn.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      setEditingTxn(null);
+      await fetchAll();
+    } else {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error || 'save failed');
+    }
+  };
+
   // Aggregates for the strip at the top
   const totals30d = transactions.reduce(
     (a, t) => {
@@ -218,6 +235,16 @@ export default function FinancePage() {
           />
         )}
 
+        {/* Edit transaction modal */}
+        {editingTxn && (
+          <EditTransactionModal
+            transaction={editingTxn}
+            accounts={accounts}
+            onSave={saveEdit}
+            onCancel={() => setEditingTxn(null)}
+          />
+        )}
+
         {/* Account quick-add CTA if none configured */}
         {accounts.length === 0 && (
           <div className="rounded-md border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-300">
@@ -243,7 +270,8 @@ export default function FinancePage() {
               return (
                 <div
                   key={t.id}
-                  className="group flex items-center gap-3 border-b border-white/[0.04] px-4 py-3 last:border-0 hover:bg-white/[0.02]"
+                  onClick={() => setEditingTxn(t)}
+                  className="group flex cursor-pointer items-center gap-3 border-b border-white/[0.04] px-4 py-3 last:border-0 hover:bg-white/[0.02]"
                 >
                   <div className="num shrink-0 text-[11px] text-white/40">
                     {new Date(t.txn_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
@@ -267,7 +295,10 @@ export default function FinancePage() {
                   </div>
                   <div className="num shrink-0 text-sm text-white/90">${Number(t.amount).toFixed(2)}</div>
                   <button
-                    onClick={() => deleteTransaction(t.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteTransaction(t.id);
+                    }}
                     className="shrink-0 text-white/20 opacity-0 transition group-hover:opacity-100 hover:text-red-400/80"
                     aria-label="Delete transaction"
                   >
@@ -495,6 +526,165 @@ function PendingReviewRow({
         >
           {pending ? 'Approving…' : 'Approve'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function EditTransactionModal({
+  transaction,
+  accounts,
+  onSave,
+  onCancel,
+}: {
+  transaction: Transaction;
+  accounts: Account[];
+  onSave: (patch: Partial<Transaction>) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [vendor, setVendor] = useState<string>(transaction.vendor || '');
+  const [amount, setAmount] = useState<string>(String(transaction.amount));
+  const [txnDate, setTxnDate] = useState<string>(transaction.txn_date);
+  const [category, setCategory] = useState<string>(transaction.category || 'other');
+  const [accountId, setAccountId] = useState<string>(transaction.account_id || '');
+  const [isBusiness, setIsBusiness] = useState<boolean>(transaction.is_business);
+  const [memo, setMemo] = useState<string>(transaction.memo || '');
+  const [pending, setPending] = useState(false);
+
+  const submit = async () => {
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return;
+    setPending(true);
+    await onSave({
+      vendor: vendor.trim() || null,
+      amount: amt,
+      txn_date: txnDate,
+      category,
+      account_id: accountId || null,
+      is_business: isBusiness,
+      memo: memo.trim() || null,
+    });
+    setPending(false);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg rounded-xl border border-emerald-400/30 bg-[color:var(--ink-1)] p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-baseline justify-between">
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-emerald-300/85">
+            Edit transaction
+          </h2>
+          <div className="num text-[10px] text-white/30">{transaction.source}</div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Vendor</div>
+            <input
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value)}
+              className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Amount</div>
+            <input
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              className="num w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Date</div>
+            <input
+              type="date"
+              value={txnDate}
+              onChange={(e) => setTxnDate(e.target.value)}
+              className="num w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Category</div>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+            >
+              {CATEGORY_OPTIONS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Account</div>
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+            >
+              <option value="">— none —</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.short_name || a.name}{a.last_4 ? ` ····${a.last_4}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="block sm:col-span-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Type</div>
+            <div className="flex items-center rounded-md border border-white/10 bg-black/30 p-0.5">
+              {(['personal', 'business'] as const).map((c) => {
+                const active = (c === 'business') === isBusiness;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setIsBusiness(c === 'business')}
+                    className={`flex-1 rounded px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] transition ${
+                      active ? 'bg-emerald-400/20 text-emerald-300' : 'text-white/40 hover:text-white/70'
+                    }`}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <label className="block sm:col-span-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Memo</div>
+            <textarea
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              rows={2}
+              className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+            />
+          </label>
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-md border border-white/10 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-white/55 hover:bg-white/[0.04]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={pending}
+            className="rounded-md border border-emerald-400/40 bg-emerald-400/15 px-4 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+          >
+            {pending ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
       </div>
     </div>
   );
