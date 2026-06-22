@@ -82,6 +82,7 @@ export default function TodayPage() {
   const [now, setNow] = useState<Date>(new Date());
   const [dayOffset, setDayOffset] = useState(0);
   const [overrideOpen, setOverrideOpen] = useState(false);
+  const [taskDrawerId, setTaskDrawerId] = useState<string | null>(null);
 
   const selectedDate = useMemo(() => {
     const d = new Date(now);
@@ -246,10 +247,28 @@ export default function TodayPage() {
         )}
 
         {/* C — Now + Next focus card */}
-        {isToday && <NowNextCard currentBlock={currentBlock} nextBlock={nextBlock} nowMin={nowMin} />}
+        {isToday && <NowNextCard currentBlock={currentBlock} nextBlock={nextBlock} nowMin={nowMin} onTaskClick={(id) => setTaskDrawerId(id)} onChanged={() => fetchBlocks(weekOffset)} />}
 
         {/* A — Pure absolute timeline */}
-        <TimelineColumn todayBlocks={todayBlocks} now={now} isToday={isToday} weekOffset={weekOffset} onChanged={() => fetchBlocks(weekOffset)} />
+        <TimelineColumn
+          todayBlocks={todayBlocks}
+          now={now}
+          isToday={isToday}
+          weekOffset={weekOffset}
+          onChanged={() => fetchBlocks(weekOffset)}
+          onTaskClick={(id) => setTaskDrawerId(id)}
+        />
+
+        {taskDrawerId && (
+          <TaskDetailDrawer
+            taskId={taskDrawerId}
+            onClose={() => setTaskDrawerId(null)}
+            onChanged={async () => {
+              await fetchBlocks(weekOffset);
+              emit(EVENTS.TASK_CHANGED);
+            }}
+          />
+        )}
 
         {/* One-off override controls */}
         <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.02] p-3 text-[12px]">
@@ -288,10 +307,14 @@ function NowNextCard({
   currentBlock,
   nextBlock,
   nowMin,
+  onTaskClick,
+  onChanged,
 }: {
   currentBlock: Block | null;
   nextBlock: Block | null;
   nowMin: number;
+  onTaskClick: (id: string) => void;
+  onChanged: () => void | Promise<void>;
 }) {
   if (!currentBlock && !nextBlock) {
     return (
@@ -318,12 +341,27 @@ function NowNextCard({
               {' · ends in '}{fmtCountdown(parseHHMM(currentBlock.end) - nowMin)}
             </div>
             {currentBlock.assigned_tasks.length > 0 && (
-              <ul className="mt-3 space-y-1">
+              <ul className="mt-3 space-y-1.5">
                 {currentBlock.assigned_tasks.map((t) => (
-                  <li key={t.id} className="flex items-baseline gap-2 text-[13px] text-white/85">
+                  <li key={t.id} className="group flex items-center gap-2 text-[13px] text-white/85">
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const ok = await completeTask(t.id);
+                        if (ok) await onChanged();
+                      }}
+                      title="Mark done"
+                      className="flex size-5 shrink-0 items-center justify-center rounded border border-white/25 transition hover:border-emerald-400 hover:bg-emerald-400/20"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-transparent transition group-hover:text-emerald-300">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </button>
                     {t.is_pinned && <span className="text-emerald-300">⭐</span>}
                     {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
-                    <span className="flex-1">{t.title}</span>
+                    <button onClick={() => onTaskClick(t.id)} className="flex-1 truncate text-left transition hover:text-white">
+                      {t.title}
+                    </button>
                     {t.estimated_minutes && <span className="num text-[10px] text-white/35">{t.estimated_minutes}m</span>}
                   </li>
                 ))}
@@ -372,18 +410,31 @@ function NowNextCard({
   );
 }
 
+type TaskLite = { id: string; title: string; estimated_minutes: number | null; is_pinned: boolean; key: boolean };
+
+async function completeTask(taskId: string): Promise<boolean> {
+  const res = await fetch(`/api/tasks/${taskId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ completed_at: new Date().toISOString() }),
+  });
+  return res.ok;
+}
+
 function TimelineColumn({
   todayBlocks,
   now,
   isToday,
   weekOffset,
   onChanged,
+  onTaskClick,
 }: {
   todayBlocks: Block[];
   now: Date;
   isToday: boolean;
   weekOffset: number;
   onChanged: () => void | Promise<void>;
+  onTaskClick: (taskId: string) => void;
 }) {
   const gridStartMin = HOUR_START * 60;
   const totalMin = (HOUR_END - HOUR_START + 1) * 60;
@@ -484,15 +535,36 @@ function TimelineColumn({
             </div>
             {b.assigned_tasks.length > 0 && height >= 60 && (
               <ul className="mt-1 space-y-0.5">
-                {b.assigned_tasks.slice(0, Math.floor((height - 40) / 18)).map((t) => (
-                  <li key={t.id} className="flex items-center gap-1 truncate text-[11px] text-white/75">
+                {b.assigned_tasks.slice(0, Math.floor((height - 40) / 20)).map((t) => (
+                  <li key={t.id} className="group flex items-center gap-1.5 truncate text-[11px] text-white/80">
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const ok = await completeTask(t.id);
+                        if (ok) await onChanged();
+                      }}
+                      title="Mark done"
+                      className="flex size-4 shrink-0 items-center justify-center rounded border border-white/20 transition hover:border-emerald-400/70 hover:bg-emerald-400/15"
+                    >
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-transparent transition group-hover:text-emerald-300/70">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </button>
                     {t.is_pinned && <span className="text-emerald-300">⭐</span>}
                     {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
-                    <span className="truncate">{t.title}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTaskClick(t.id);
+                      }}
+                      className="truncate text-left transition hover:text-white"
+                    >
+                      {t.title}
+                    </button>
                   </li>
                 ))}
-                {b.assigned_tasks.length > Math.floor((height - 40) / 18) && (
-                  <li className="text-[9px] text-white/30">+ {b.assigned_tasks.length - Math.floor((height - 40) / 18)} more</li>
+                {b.assigned_tasks.length > Math.floor((height - 40) / 20) && (
+                  <li className="text-[9px] text-white/30">+ {b.assigned_tasks.length - Math.floor((height - 40) / 20)} more</li>
                 )}
               </ul>
             )}
@@ -595,5 +667,205 @@ function OverrideForm({
         {pending ? 'Saving…' : 'Save block'}
       </button>
     </form>
+  );
+}
+
+type FullTask = {
+  id: string;
+  title: string;
+  description: string | null;
+  urgency: string;
+  key: boolean;
+  category: string | null;
+  energy: string | null;
+  estimated_minutes: number | null;
+  is_pinned: boolean;
+  tags: string[];
+  due_date: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
+function TaskDetailDrawer({
+  taskId,
+  onClose,
+  onChanged,
+}: {
+  taskId: string;
+  onClose: () => void;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [task, setTask] = useState<FullTask | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  // Editable fields
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [urgency, setUrgency] = useState<string>('this_week');
+  const [estMin, setEstMin] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/tasks?status=all&limit=500`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((body: { tasks: FullTask[] }) => {
+        if (cancelled) return;
+        const t = (body.tasks || []).find((x) => x.id === taskId);
+        if (!t) {
+          setErr('Task not found');
+          return;
+        }
+        setTask(t);
+        setTitle(t.title);
+        setDescription(t.description || '');
+        setUrgency(t.urgency);
+        setEstMin(t.estimated_minutes != null ? String(t.estimated_minutes) : '');
+      })
+      .catch((e) => setErr(`load ${e}`));
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId]);
+
+  const save = async () => {
+    setPending(true);
+    const patch: Record<string, unknown> = {
+      title: title.trim(),
+      description: description.trim() || null,
+      urgency,
+      estimated_minutes: estMin ? Number(estMin) : null,
+    };
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    setPending(false);
+    if (res.ok) {
+      await onChanged();
+      onClose();
+    } else {
+      setErr(`save ${res.status}`);
+    }
+  };
+
+  const complete = async () => {
+    setPending(true);
+    const ok = await completeTask(taskId);
+    setPending(false);
+    if (ok) {
+      await onChanged();
+      onClose();
+    }
+  };
+
+  const remove = async () => {
+    if (!confirm('Delete this task?')) return;
+    setPending(true);
+    await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
+    setPending(false);
+    await onChanged();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="w-full max-w-md overflow-y-auto border-l border-white/10 bg-[color:var(--ink-1)] p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-baseline justify-between">
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-white/40">Task detail</h2>
+          <button onClick={onClose} className="text-[11px] text-white/40 hover:text-white/80">close ✕</button>
+        </div>
+
+        {err && <div className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-300">{err}</div>}
+        {!task && !err && <div className="text-[12px] text-white/40">Loading…</div>}
+
+        {task && (
+          <div className="space-y-3">
+            <label className="block">
+              <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Title</div>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Description / notes</div>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={4}
+                className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Urgency</div>
+                <select
+                  value={urgency}
+                  onChange={(e) => setUrgency(e.target.value)}
+                  className="w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none"
+                >
+                  <option value="today">Today</option>
+                  <option value="this_week">This week</option>
+                  <option value="this_month">This month</option>
+                  <option value="someday">Someday</option>
+                </select>
+              </label>
+              <label className="block">
+                <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-white/40">Estimated minutes</div>
+                <input
+                  value={estMin}
+                  onChange={(e) => setEstMin(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="45"
+                  className="num w-full rounded-md border border-white/10 bg-black/40 px-3 py-2 text-sm text-white/90 outline-none focus:border-emerald-400/40"
+                />
+              </label>
+            </div>
+
+            <div className="rounded-md border border-white/[0.06] bg-black/30 p-3 text-[11px] text-white/55">
+              <div><span className="text-white/40">Category:</span> {task.category || '—'} {task.energy && `· ${task.energy} energy`}</div>
+              {task.tags.length > 0 && (
+                <div className="mt-1"><span className="text-white/40">Tags:</span> {task.tags.map((t) => `#${t}`).join(' ')}</div>
+              )}
+              <div className="mt-1 num text-[10px] text-white/30">
+                Created {new Date(task.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                {task.due_date && ` · due ${task.due_date}`}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-between gap-2 pt-2">
+              <div className="flex gap-2">
+                <button
+                  onClick={complete}
+                  disabled={pending}
+                  className="rounded-md border border-emerald-400/40 bg-emerald-400/15 px-4 py-2 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+                >
+                  ✓ Mark done
+                </button>
+                <button
+                  onClick={save}
+                  disabled={pending || !title.trim()}
+                  className="rounded-md border border-white/15 bg-white/[0.06] px-4 py-2 text-[11px] uppercase tracking-[0.18em] text-white/80 hover:bg-white/[0.12] disabled:opacity-40"
+                >
+                  Save edits
+                </button>
+              </div>
+              <button
+                onClick={remove}
+                disabled={pending}
+                className="rounded-md border border-red-400/30 bg-red-400/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-red-300/85 hover:bg-red-400/[0.12] disabled:opacity-40"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
