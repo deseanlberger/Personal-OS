@@ -30,15 +30,16 @@ type BlocksResponse = {
 const HOUR_START = 5; // 5 AM
 const HOUR_END = 21; // 9 PM
 const HOURS = Array.from({ length: HOUR_END - HOUR_START + 1 }, (_, i) => HOUR_START + i);
+const HOUR_HEIGHT_PX = 80; // px per hour in the timeline column
 
 const TYPE_TONE: Record<string, string> = {
-  'deep-thinking': 'border-blue-400/30 bg-blue-400/[0.06]',
-  'deep-admin': 'border-yellow-400/30 bg-yellow-400/[0.06]',
-  'multitask-admin': 'border-orange-400/30 bg-orange-400/[0.06]',
-  'meeting': 'border-emerald-400/30 bg-emerald-400/[0.06]',
-  'coaching': 'border-white/15 bg-white/[0.04]',
-  'personal': 'border-white/10 bg-white/[0.02]',
-  'flex': 'border-sky-400/30 bg-sky-400/[0.06]',
+  'deep-thinking': 'border-blue-400/30 bg-blue-400/[0.08]',
+  'deep-admin': 'border-yellow-400/30 bg-yellow-400/[0.08]',
+  'multitask-admin': 'border-orange-400/30 bg-orange-400/[0.08]',
+  'meeting': 'border-emerald-400/30 bg-emerald-400/[0.08]',
+  'coaching': 'border-white/15 bg-white/[0.06]',
+  'personal': 'border-white/10 bg-white/[0.03]',
+  'flex': 'border-sky-400/30 bg-sky-400/[0.08]',
 };
 
 const TYPE_LABEL: Record<string, string> = {
@@ -51,30 +52,23 @@ const TYPE_LABEL: Record<string, string> = {
   'flex': 'Flex',
 };
 
-function parseHHMM(t: string): { h: number; m: number } {
+function parseHHMM(t: string): number {
   const [h, m] = t.split(':').map(Number);
-  return { h, m };
+  return h * 60 + m;
 }
 
-function blockOverlapsHour(b: Block, hour: number): boolean {
-  const s = parseHHMM(b.start);
-  const e = parseHHMM(b.end);
-  const sMin = s.h * 60 + s.m;
-  const eMin = e.h * 60 + e.m;
-  const hourStart = hour * 60;
-  const hourEnd = (hour + 1) * 60;
-  return sMin < hourEnd && eMin > hourStart;
-}
-
-function blockStartsInHour(b: Block, hour: number): boolean {
-  const s = parseHHMM(b.start);
-  return s.h === hour;
+function fmtCountdown(min: number): string {
+  if (min < 1) return 'now';
+  if (min < 60) return `${Math.round(min)} min`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
 function mondayOf(d: Date): Date {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
-  const dow = x.getDay(); // 0 Sun..6 Sat
+  const dow = x.getDay();
   const offsetToMon = dow === 0 ? -6 : 1 - dow;
   x.setDate(x.getDate() + offsetToMon);
   return x;
@@ -86,8 +80,8 @@ export default function TodayPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [now, setNow] = useState<Date>(new Date());
-  // 0 = today, +1 = tomorrow, -1 = yesterday, etc.
   const [dayOffset, setDayOffset] = useState(0);
+  const [overrideOpen, setOverrideOpen] = useState(false);
 
   const selectedDate = useMemo(() => {
     const d = new Date(now);
@@ -124,8 +118,6 @@ export default function TodayPage() {
     const tick = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(tick);
   }, []);
-
-  const [overrideForm, setOverrideForm] = useState<null | { open: true }>(null);
 
   const refreshWeek = async () => {
     setRefreshing(true);
@@ -164,12 +156,19 @@ export default function TodayPage() {
       .sort((a, b) => a.start.localeCompare(b.start));
   }, [data, selectedDayOfWeek]);
 
-  const nowH = now.getHours();
-  const nowM = now.getMinutes();
-  const nowOffsetPct = ((nowM / 60) * 100).toFixed(1);
-  const showNowLine = isToday && nowH >= HOUR_START && nowH <= HOUR_END;
-
-  const taskCount = todayBlocks.reduce((sum, b) => sum + b.assigned_tasks.length, 0);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const { currentBlock, nextBlock } = useMemo(() => {
+    if (!isToday) return { currentBlock: null, nextBlock: todayBlocks[0] || null };
+    let curr: Block | null = null;
+    let next: Block | null = null;
+    for (const b of todayBlocks) {
+      const s = parseHHMM(b.start);
+      const e = parseHHMM(b.end);
+      if (s <= nowMin && e > nowMin) curr = b;
+      else if (s > nowMin && !next) next = b;
+    }
+    return { currentBlock: curr, nextBlock: next };
+  }, [todayBlocks, nowMin, isToday]);
 
   const headerLabel = useMemo(() => {
     if (dayOffset === 0) return 'Today';
@@ -180,14 +179,14 @@ export default function TodayPage() {
 
   return (
     <Shell>
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="mx-auto max-w-3xl space-y-5">
         <header className="flex items-baseline justify-between">
           <div>
             <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
               {headerLabel} · {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
             </h1>
             <p className="mt-1 text-sm text-white/55">
-              Every hour from 5 AM to 9 PM. Tasks slot into their assigned blocks automatically.
+              Live timeline from 5 AM to 9 PM. Blocks span their full duration.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -242,53 +241,39 @@ export default function TodayPage() {
           </button>
         </div>
 
-        <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.18em] text-white/40">
-          <span className="num">{todayBlocks.length} blocks</span>
-          <span className="num">{taskCount} tasks</span>
-          {weekOffset !== 0 && (
-            <span className="text-amber-300/70">· {weekOffset > 0 ? 'next' : 'past'} week view</span>
-          )}
-        </div>
-
         {err && (
           <div className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-300">{err}</div>
         )}
 
-        {/* Hourly grid */}
-        <HourlyGrid
-          todayBlocks={todayBlocks}
-          nowH={nowH}
-          nowM={nowM}
-          showNowLine={showNowLine}
-          weekOffset={weekOffset}
-          fetchBlocks={fetchBlocks}
-        />
+        {/* C — Now + Next focus card */}
+        {isToday && <NowNextCard currentBlock={currentBlock} nextBlock={nextBlock} nowMin={nowMin} />}
 
-        {/* One-off block override for this day */}
+        {/* A — Pure absolute timeline */}
+        <TimelineColumn todayBlocks={todayBlocks} now={now} isToday={isToday} weekOffset={weekOffset} onChanged={() => fetchBlocks(weekOffset)} />
+
+        {/* One-off override controls */}
         <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.02] p-3 text-[12px]">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/70">
-                One-off override
-              </div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/70">One-off override</div>
               <div className="mt-0.5 text-white/55">
-                Add a block just for {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} —
-                covering shifts, doctor visits, anything off-template.
+                Add a block just for{' '}
+                {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}.
               </div>
             </div>
             <button
-              onClick={() => setOverrideForm(overrideForm ? null : { open: true })}
+              onClick={() => setOverrideOpen((v) => !v)}
               className="min-h-9 shrink-0 rounded-md border border-amber-400/40 bg-amber-400/15 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-amber-300 hover:bg-amber-400/25"
             >
-              {overrideForm ? 'Close' : '+ Add block'}
+              {overrideOpen ? 'Close' : '+ Add block'}
             </button>
           </div>
-          {overrideForm && (
+          {overrideOpen && (
             <OverrideForm
               date={selectedDate}
               onSaved={async () => {
                 await fetchBlocks(weekOffset);
-                setOverrideForm(null);
+                setOverrideOpen(false);
               }}
               onError={(msg) => setErr(msg)}
             />
@@ -296,6 +281,225 @@ export default function TodayPage() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+function NowNextCard({
+  currentBlock,
+  nextBlock,
+  nowMin,
+}: {
+  currentBlock: Block | null;
+  nextBlock: Block | null;
+  nowMin: number;
+}) {
+  if (!currentBlock && !nextBlock) {
+    return (
+      <section className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">Day complete</div>
+        <div className="mt-1 text-sm text-white/55">Nothing else scheduled. Rest, ship, or set tomorrow up.</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="grid grid-cols-1 gap-3 lg:grid-cols-[2fr_1fr]">
+      {/* RIGHT NOW */}
+      <div className={`rounded-xl border p-4 ${currentBlock ? TYPE_TONE[currentBlock.type] || TYPE_TONE.personal : 'border-white/[0.06] bg-white/[0.02]'}`}>
+        <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-300">
+          {currentBlock ? 'Right now' : 'Free time'}
+        </div>
+        {currentBlock ? (
+          <>
+            <div className="mt-1 text-xl font-medium text-white/95">{currentBlock.name}</div>
+            <div className="num mt-0.5 text-[11px] uppercase tracking-[0.14em] text-white/55">
+              {to12h(currentBlock.start)} – {to12h(currentBlock.end)} · {TYPE_LABEL[currentBlock.type] || currentBlock.type}
+              {currentBlock.energy && ` · ${currentBlock.energy} energy`}
+              {' · ends in '}{fmtCountdown(parseHHMM(currentBlock.end) - nowMin)}
+            </div>
+            {currentBlock.assigned_tasks.length > 0 && (
+              <ul className="mt-3 space-y-1">
+                {currentBlock.assigned_tasks.map((t) => (
+                  <li key={t.id} className="flex items-baseline gap-2 text-[13px] text-white/85">
+                    {t.is_pinned && <span className="text-emerald-300">⭐</span>}
+                    {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
+                    <span className="flex-1">{t.title}</span>
+                    {t.estimated_minutes && <span className="num text-[10px] text-white/35">{t.estimated_minutes}m</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : nextBlock ? (
+          <>
+            <div className="mt-1 text-xl font-medium text-white/85">
+              Free until {to12h(nextBlock.start)}
+            </div>
+            <div className="num mt-0.5 text-[11px] uppercase tracking-[0.14em] text-white/40">
+              {fmtCountdown(parseHHMM(nextBlock.start) - nowMin)} of open time
+            </div>
+          </>
+        ) : null}
+      </div>
+
+      {/* NEXT UP */}
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Next up</div>
+        {nextBlock ? (
+          <>
+            <div className="mt-1 text-sm font-medium text-white/85">{nextBlock.name}</div>
+            <div className="num mt-0.5 text-[11px] uppercase tracking-[0.14em] text-white/40">
+              {to12h(nextBlock.start)} · in {fmtCountdown(parseHHMM(nextBlock.start) - nowMin)}
+            </div>
+            {nextBlock.assigned_tasks.length > 0 && (
+              <ul className="mt-2 space-y-0.5">
+                {nextBlock.assigned_tasks.slice(0, 3).map((t) => (
+                  <li key={t.id} className="truncate text-[11px] text-white/60">
+                    · {t.title}
+                  </li>
+                ))}
+                {nextBlock.assigned_tasks.length > 3 && (
+                  <li className="text-[10px] text-white/30">+ {nextBlock.assigned_tasks.length - 3} more</li>
+                )}
+              </ul>
+            )}
+          </>
+        ) : (
+          <div className="mt-1 text-sm text-white/40">Nothing else today</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TimelineColumn({
+  todayBlocks,
+  now,
+  isToday,
+  weekOffset,
+  onChanged,
+}: {
+  todayBlocks: Block[];
+  now: Date;
+  isToday: boolean;
+  weekOffset: number;
+  onChanged: () => void | Promise<void>;
+}) {
+  const gridStartMin = HOUR_START * 60;
+  const totalMin = (HOUR_END - HOUR_START + 1) * 60;
+  const totalHeight = (totalMin / 60) * HOUR_HEIGHT_PX;
+  const nowH = now.getHours();
+  const nowM = now.getMinutes();
+  const nowOffsetPx = (nowH * 60 + nowM - gridStartMin) / 60 * HOUR_HEIGHT_PX;
+  const showNowLine = isToday && nowH >= HOUR_START && nowH <= HOUR_END;
+
+  return (
+    <div
+      className="relative rounded-xl border border-white/[0.06] bg-white/[0.02]"
+      style={{ height: totalHeight }}
+    >
+      {/* Hour ticks (left margin) */}
+      {HOURS.map((hour, i) => (
+        <div
+          key={hour}
+          className={`absolute left-0 right-0 ${i > 0 ? 'border-t border-white/[0.03]' : ''}`}
+          style={{ top: i * HOUR_HEIGHT_PX }}
+        >
+          <div className="num absolute left-3 top-1 text-[10px] text-white/30">
+            {to12h(`${String(hour).padStart(2, '0')}:00`)}
+          </div>
+        </div>
+      ))}
+
+      {/* Half-hour ticks for finer reading */}
+      {HOURS.map((hour, i) => (
+        <div
+          key={`half-${hour}`}
+          className="absolute left-16 right-0 border-t border-white/[0.015]"
+          style={{ top: i * HOUR_HEIGHT_PX + HOUR_HEIGHT_PX / 2 }}
+        />
+      ))}
+
+      {/* Now line */}
+      {showNowLine && (
+        <div
+          className="absolute left-0 right-0 z-30 flex items-center"
+          style={{ top: nowOffsetPx }}
+        >
+          <div className="num ml-1 w-12 text-right text-[9px] font-medium text-emerald-300">
+            {now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
+          </div>
+          <div className="ml-1 size-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+          <div className="h-px flex-1 bg-emerald-400/60" />
+        </div>
+      )}
+
+      {/* Blocks */}
+      {todayBlocks.map((b) => {
+        const startMin = parseHHMM(b.start);
+        const endMin = parseHHMM(b.end);
+        const top = (startMin - gridStartMin) / 60 * HOUR_HEIGHT_PX;
+        const height = (endMin - startMin) / 60 * HOUR_HEIGHT_PX;
+        const isOverride = !!b.is_override;
+        const tone = TYPE_TONE[b.type] || TYPE_TONE.personal;
+        const isActive = b.day === now.getDay() && startMin <= nowH * 60 + nowM && endMin > nowH * 60 + nowM && isToday;
+        return (
+          <div
+            key={b.id}
+            className={`absolute left-16 right-2 z-10 overflow-hidden rounded-md border px-2.5 py-1.5 transition ${
+              isOverride
+                ? 'border-amber-400/50 bg-amber-400/[0.10]'
+                : tone
+            } ${isActive ? 'ring-1 ring-emerald-400/40' : ''}`}
+            style={{ top: top + 1, height: Math.max(height - 2, 22) }}
+          >
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-white/90">
+                  {b.name}
+                  {isOverride && (
+                    <span className="ml-2 rounded border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-amber-300">
+                      ONE-OFF
+                    </span>
+                  )}
+                </div>
+                <div className="num truncate text-[10px] uppercase tracking-[0.14em] text-white/45">
+                  {to12h(b.start)} – {to12h(b.end)} · {TYPE_LABEL[b.type] || b.type}
+                  {b.energy && ` · ${b.energy}`}
+                </div>
+              </div>
+              {isOverride && b.override_id && (
+                <button
+                  onClick={async () => {
+                    if (!confirm(`Remove "${b.name}"?`)) return;
+                    await fetch(`/api/calendar/overrides/${b.override_id}`, { method: 'DELETE' });
+                    await onChanged();
+                  }}
+                  className="shrink-0 text-[11px] text-amber-300/70 hover:text-amber-300"
+                  aria-label="Remove override"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            {b.assigned_tasks.length > 0 && height >= 60 && (
+              <ul className="mt-1 space-y-0.5">
+                {b.assigned_tasks.slice(0, Math.floor((height - 40) / 18)).map((t) => (
+                  <li key={t.id} className="flex items-center gap-1 truncate text-[11px] text-white/75">
+                    {t.is_pinned && <span className="text-emerald-300">⭐</span>}
+                    {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
+                    <span className="truncate">{t.title}</span>
+                  </li>
+                ))}
+                {b.assigned_tasks.length > Math.floor((height - 40) / 18) && (
+                  <li className="text-[9px] text-white/30">+ {b.assigned_tasks.length - Math.floor((height - 40) / 18)} more</li>
+                )}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -308,134 +512,6 @@ const OVERRIDE_TYPES = [
   { value: 'multitask-admin', label: 'Multi Admin' },
   { value: 'flex', label: 'Flex' },
 ] as const;
-
-const HOUR_HEIGHT_PX = 72;
-
-function timeToMin(t: string): number {
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
-}
-
-function HourlyGrid({
-  todayBlocks,
-  nowH,
-  nowM,
-  showNowLine,
-  weekOffset,
-  fetchBlocks,
-}: {
-  todayBlocks: Block[];
-  nowH: number;
-  nowM: number;
-  showNowLine: boolean;
-  weekOffset: number;
-  fetchBlocks: (offset: number) => Promise<void>;
-}) {
-  const gridStartMin = HOUR_START * 60;
-  const totalMin = (HOUR_END - HOUR_START + 1) * 60;
-  const totalHeight = (totalMin / 60) * HOUR_HEIGHT_PX;
-  const nowOffsetPx = ((nowH * 60 + nowM) - gridStartMin) / 60 * HOUR_HEIGHT_PX;
-
-  return (
-    <div className="relative rounded-xl border border-white/[0.06] bg-white/[0.02]" style={{ height: totalHeight }}>
-      {/* Hour rows (background grid) */}
-      {HOURS.map((hour, i) => {
-        const isNowHour = hour === nowH;
-        return (
-          <div
-            key={hour}
-            className={`absolute left-0 right-0 border-t border-white/[0.04] ${i === 0 ? 'border-t-0' : ''} ${
-              isNowHour ? 'bg-emerald-400/[0.025]' : ''
-            }`}
-            style={{ top: i * HOUR_HEIGHT_PX, height: HOUR_HEIGHT_PX }}
-          >
-            <div className="num absolute left-3 top-1.5 text-[11px] text-white/40">
-              {to12h(`${String(hour).padStart(2, '0')}:00`)}
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Now line */}
-      {showNowLine && (
-        <div
-          className="absolute left-16 right-0 z-20 flex items-center"
-          style={{ top: nowOffsetPx }}
-        >
-          <div className="mr-1 size-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
-          <div className="h-px flex-1 bg-emerald-400/60" />
-        </div>
-      )}
-
-      {/* Blocks: absolutely positioned, height proportional to duration */}
-      {todayBlocks.map((b) => {
-        const startMin = timeToMin(b.start) - gridStartMin;
-        const endMin = timeToMin(b.end) - gridStartMin;
-        const top = (startMin / 60) * HOUR_HEIGHT_PX;
-        const height = ((endMin - startMin) / 60) * HOUR_HEIGHT_PX;
-        const tone = TYPE_TONE[b.type] || TYPE_TONE.personal;
-        const isOverride = !!b.is_override;
-        return (
-          <div
-            key={b.id}
-            className={`absolute left-16 right-2 z-10 overflow-hidden rounded-md border px-2.5 py-1.5 ${
-              isOverride ? 'border-amber-400/40 bg-amber-400/[0.08]' : tone
-            }`}
-            style={{ top: top + 2, height: Math.max(height - 4, 24) }}
-          >
-            <div className="flex items-baseline justify-between gap-2">
-              <div className="text-sm font-medium text-white/90">
-                {b.name}
-                {isOverride && (
-                  <span className="ml-2 rounded border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-amber-300">
-                    ONE-OFF
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <div className="num text-[10px] text-white/50">
-                  {to12h(b.start)} – {to12h(b.end)}
-                </div>
-                {isOverride && b.override_id && (
-                  <button
-                    onClick={async () => {
-                      if (!confirm(`Remove "${b.name}"?`)) return;
-                      await fetch(`/api/calendar/overrides/${b.override_id}`, { method: 'DELETE' });
-                      await fetchBlocks(weekOffset);
-                    }}
-                    className="text-[10px] text-amber-300/70 hover:text-amber-300"
-                    aria-label="Remove override"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/40">
-              {TYPE_LABEL[b.type] || b.type}
-              {b.energy && ` · ${b.energy} energy`}
-              {b.locked && ' · locked'}
-            </div>
-            {b.assigned_tasks.length > 0 && (
-              <ul className="mt-1.5 space-y-0.5">
-                {b.assigned_tasks.map((t) => (
-                  <li key={t.id} className="flex items-center gap-1.5 text-[12px] text-white/80">
-                    {t.is_pinned && <span className="text-emerald-300">⭐</span>}
-                    {t.key && !t.is_pinned && <span className="text-amber-300">★</span>}
-                    <span>{t.title}</span>
-                    {t.estimated_minutes && (
-                      <span className="num text-[10px] text-white/30">· {t.estimated_minutes}m</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 function OverrideForm({
   date,
