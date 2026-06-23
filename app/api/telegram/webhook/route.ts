@@ -165,15 +165,36 @@ async function handleMessage(msg: NonNullable<TelegramUpdate['message']>): Promi
   try {
     const result = await routeCapture({ text, source: 'telegram', audio_url: audioUrl });
 
-    const c = result.classification;
-    const reply = jarvisReply(c, result.routed_to);
+    // Strength logs get a distinct confirmation message and no urgency keyboard
+    if (result.routed_to === 'strength_session' && result.strength) {
+      const s = result.strength;
+      const setsText = s.sets.length === 1
+        ? `${s.sets[0].weight}×${s.sets[0].reps}`
+        : s.sets.every((x) => x.weight === s.sets[0].weight && x.reps === s.sets[0].reps)
+          ? `${s.sets[0].weight}×${s.sets[0].reps}×${s.sets.length}`
+          : s.sets.map((x) => `${x.weight}×${x.reps}`).join(', ');
+      await sendMessage(
+        chatId,
+        `*Logged, sir.* ${s.exercise_canonical} — ${setsText}`,
+        { reply_to_message_id: msg.message_id },
+      );
+    } else if (result.routed_to === 'strength_pending' && result.strength) {
+      await sendMessage(
+        chatId,
+        `Apologies, sir — I do not recognize "${result.strength.exercise_alias}" as one of your exercises. The set is parked on the workout dashboard for review.`,
+        { reply_to_message_id: msg.message_id },
+      );
+    } else {
+      const c = result.classification;
+      const reply = jarvisReply(c, result.routed_to === 'tasks' ? 'tasks' : null);
 
-    await sendMessage(chatId, reply, {
-      reply_to_message_id: msg.message_id,
-      reply_markup: result.routed_id
-        ? taskKeyboard(result.routed_id, c.category)
-        : undefined,
-    });
+      await sendMessage(chatId, reply, {
+        reply_to_message_id: msg.message_id,
+        reply_markup: result.routed_id && result.routed_to === 'tasks'
+          ? taskKeyboard(result.routed_id, c.category)
+          : undefined,
+      });
+    }
   } catch (err) {
     console.error('[telegram.handleMessage] capture failed:', err);
     await sendMessage(chatId, `Apologies, sir — capture failed: ${(err as Error).message}`);
