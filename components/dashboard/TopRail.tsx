@@ -13,6 +13,7 @@ const TABS = [
   { href: '/brain', label: 'BRAIN' },
   { href: '/library', label: 'LIBRARY' },
   { href: '/finance', label: 'FINANCE' },
+  { href: '/workout', label: 'WORKOUT' },
   { href: '/review', label: 'REVIEW' },
 ];
 
