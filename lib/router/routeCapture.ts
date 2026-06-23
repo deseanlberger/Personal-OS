@@ -224,8 +224,12 @@ async function routeStrengthLog(
     };
   }
 
-  // 3. Create workout_session + strength_sets
+  // 3. Create workout_session + strength_sets.
+  // Calendar link layer (step 5): compute the active block id from now()
+  // using the existing blockId() format ('MON-05:30'). Read-only — we never
+  // write into block_templates from here.
   const today = localDateKey();
+  const calendarBlockId = await findActiveBlockId();
   const { data: session, error: sessionErr } = await supabase
     .from('workout_sessions')
     .insert({
@@ -233,6 +237,7 @@ async function routeStrengthLog(
       session_date: today,
       session_type: 'strength',
       category: 'personal',
+      calendar_block_id: calendarBlockId,
       notes: log.notes ?? null,
       needs_review: false,
     })
@@ -298,6 +303,42 @@ async function routeStrengthLog(
       needs_review: false,
     },
   };
+}
+
+const DAY_PREFIX = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
+
+/**
+ * Compute the deterministic block id for the user's currently-active block.
+ * Format is the same as lib/blocks/template.ts blockId(): 'MON-05:30'.
+ * Used as a read-only link from workout_sessions back to the calendar.
+ *
+ * Returns null when no block is active right now (between blocks).
+ */
+async function findActiveBlockId(): Promise<string | null> {
+  try {
+    const now = new Date();
+    const dow = now.getDay();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const { data } = await supabase
+      .from('block_templates')
+      .select('start_time, end_time')
+      .eq('user_id', USER_ID)
+      .eq('is_active', true)
+      .eq('day', dow);
+    if (!data) return null;
+    for (const b of data as { start_time: string; end_time: string }[]) {
+      const [sh, sm] = b.start_time.split(':').map(Number);
+      const [eh, em] = b.end_time.split(':').map(Number);
+      const s = sh * 60 + sm;
+      const e = eh * 60 + em;
+      if (s <= nowMin && nowMin < e) {
+        return `${DAY_PREFIX[dow]}-${b.start_time}`;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function formatSetSummary(sets: ParsedStrengthLog['sets']): string {

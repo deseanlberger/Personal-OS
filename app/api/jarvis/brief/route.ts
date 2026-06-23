@@ -89,6 +89,21 @@ export async function GET() {
     .eq('user_id', USER_ID)
     .eq('needs_review', true);
 
+  // Workout context — last bench top-set, last run, did we train today
+  const { data: todayWorkouts } = await supabase
+    .from('workout_sessions')
+    .select('session_type')
+    .eq('user_id', USER_ID)
+    .eq('session_date', today);
+  const didStrengthToday = !!todayWorkouts?.some((w) => w.session_type === 'strength');
+  const didRunToday = !!todayWorkouts?.some((w) => w.session_type === 'running');
+  const { data: lastBench } = await supabase
+    .from('v_strength_pr_trend')
+    .select('best_top_weight, session_date')
+    .eq('exercise_name', 'Barbell Bench Press')
+    .order('session_date', { ascending: false })
+    .limit(1);
+
   // Compose facts for Claude
   const facts = [
     `Time: ${now.toLocaleString('en-US', { timeZone: USER_TIMEZONE, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })}`,
@@ -102,6 +117,11 @@ export async function GET() {
       ? `Habits today: ${Object.entries(habitEntries).map(([k, v]) => `${k}=${v}`).join(', ')}`
       : null,
     pendingCount && pendingCount > 0 ? `${pendingCount} receipts awaiting review` : null,
+    didStrengthToday ? 'Already trained today (strength)' : null,
+    didRunToday ? 'Already ran today' : null,
+    lastBench && lastBench[0]
+      ? `Last bench top-set: ${Number(lastBench[0].best_top_weight).toFixed(0)} lb (${lastBench[0].session_date})`
+      : null,
   ].filter(Boolean).join('\n');
 
   // Fallback when Claude is offline
