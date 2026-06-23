@@ -34,9 +34,40 @@ export function JarvisVoice() {
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [history, setHistory] = useState<ChatTurn[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [thinking, setThinking] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const speakingRef = useRef(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Persist conversation across page reloads so the chat feels continuous.
+  // localStorage key versioned to allow future schema changes without crashes.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem('jarvis_chat_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw) as ChatTurn[];
+        if (Array.isArray(parsed)) setHistory(parsed.slice(-30));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('jarvis_chat_v1', JSON.stringify(history.slice(-30)));
+    } catch {
+      // quota issues: not worth crashing the UI
+    }
+    // Pin chat to the bottom on new message
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [history]);
 
   // Reusable audio element so iOS keeps it "unlocked" after the first tap.
   // We create it lazily, but always inside a user gesture.
@@ -128,11 +159,12 @@ export function JarvisVoice() {
   }, [getAudioEl]);
 
   const sendMessage = useCallback(
-    async (message: string) => {
+    async (message: string, opts: { speakReply?: boolean } = {}) => {
       if (!message.trim()) return;
       const next: ChatTurn[] = [...history, { role: 'user', content: message }];
       setHistory(next);
-      setText(`You: ${message}`);
+      setErr(null);
+      setThinking(true);
       try {
         const res = await fetch('/api/jarvis/chat', {
           method: 'POST',
@@ -144,13 +176,32 @@ export function JarvisVoice() {
         const reply = body.reply as string;
         setHistory((h) => [...h, { role: 'assistant', content: reply }]);
         setText(reply);
-        await speak(reply);
+        if (opts.speakReply) await speak(reply);
       } catch (e) {
         setErr((e as Error).message);
+      } finally {
+        setThinking(false);
       }
     },
     [history, speak],
   );
+
+  const submitInput = useCallback(async () => {
+    const message = inputText.trim();
+    if (!message || thinking) return;
+    setInputText('');
+    await sendMessage(message);
+  }, [inputText, thinking, sendMessage]);
+
+  const clearHistory = useCallback(() => {
+    if (history.length === 0) return;
+    if (!confirm('Clear chat with Jarvis?')) return;
+    setHistory([]);
+    setText(null);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('jarvis_chat_v1');
+    }
+  }, [history]);
 
   // Always-listening mode wiring
   useEffect(() => {
@@ -178,7 +229,7 @@ export function JarvisVoice() {
       finalChunks = '';
       setTranscript('');
       if (m && !speakingRef.current) {
-        await sendMessage(m);
+        await sendMessage(m, { speakReply: true });
       }
     };
     rec.onresult = (e) => {
@@ -250,21 +301,84 @@ export function JarvisVoice() {
       {err && <div className="mt-2 text-[11px] text-red-300/85">⚠ {err}</div>}
 
       {transcript && listening && (
-        <div className="mt-2 text-[11px] italic text-white/45">{transcript}</div>
+        <div className="mt-2 text-[11px] italic text-white/45">› {transcript}</div>
       )}
 
-      {text && (
-        <div className="mt-2 whitespace-pre-wrap text-[12px] leading-relaxed text-white/80">
-          {text}
-        </div>
-      )}
+      {/* Chat history. Stays mounted so the conversation is always there. */}
+      <div
+        ref={scrollRef}
+        className="mt-3 max-h-72 space-y-2 overflow-y-auto rounded-md border border-white/[0.06] bg-black/30 p-2 sm:max-h-80"
+      >
+        {history.length === 0 && !text && (
+          <div className="px-1 py-3 text-[11px] text-white/40">
+            Type below or tap <span className="text-emerald-300">Brief me</span> /{' '}
+            <span className="text-white/60">🎙 Listen</span> to start a conversation.
+          </div>
+        )}
+        {/* Initial brief response (from Brief Me) shown above any chat */}
+        {text && history.length === 0 && (
+          <div className="rounded-md border border-emerald-400/15 bg-emerald-400/[0.04] px-2 py-1.5 text-[12px] leading-relaxed text-white/85">
+            {text}
+          </div>
+        )}
+        {history.map((turn, i) => (
+          <div
+            key={i}
+            className={`flex ${turn.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div
+              className={`max-w-[85%] whitespace-pre-wrap rounded-md px-2.5 py-1.5 text-[12px] leading-relaxed ${
+                turn.role === 'user'
+                  ? 'bg-emerald-400/20 text-emerald-50'
+                  : 'border border-white/[0.08] bg-white/[0.04] text-white/85'
+              }`}
+            >
+              {turn.content}
+            </div>
+          </div>
+        ))}
+        {thinking && (
+          <div className="flex justify-start">
+            <div className="rounded-md border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-white/40">
+              Thinking…
+            </div>
+          </div>
+        )}
+      </div>
 
-      {!text && !err && !listening && (
-        <div className="mt-2 text-[11px] text-white/40">
-          Tap <span className="text-emerald-300">Brief me</span> for today&apos;s overview, or{' '}
-          <span className="text-white/60">🎙 Listen</span> to converse hands-free.
-        </div>
-      )}
+      {/* Text input — always visible, even while listening */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submitInput();
+        }}
+        className="mt-2 flex items-center gap-1.5"
+      >
+        <input
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          placeholder="Ask Jarvis anything…"
+          autoComplete="off"
+          className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white/85 outline-none placeholder:text-white/30 focus:border-emerald-400/40"
+        />
+        <button
+          type="submit"
+          disabled={!inputText.trim() || thinking}
+          className="min-h-9 shrink-0 rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+        >
+          Send
+        </button>
+        {history.length > 0 && (
+          <button
+            type="button"
+            onClick={clearHistory}
+            title="Clear chat"
+            className="min-h-9 shrink-0 rounded-md border border-white/10 px-2 py-1.5 text-[11px] text-white/40 hover:bg-white/[0.04] hover:text-white/70"
+          >
+            ×
+          </button>
+        )}
+      </form>
     </div>
   );
 }
