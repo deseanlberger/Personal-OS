@@ -53,22 +53,43 @@ export async function POST(req: NextRequest) {
     (existing || []).map((e) => `${e.txn_date}|${Number(e.amount).toFixed(2)}|${(e.vendor || '').toLowerCase().trim()}`),
   );
 
+  // Auto-apply category rules learned from past edits. One query pulls every
+  // rule, then we match per-row by lowercased vendor.
+  const { data: rulesData } = await supabase
+    .from('category_rules')
+    .select('vendor_normalized, category, is_business')
+    .eq('user_id', USER_ID);
+  const ruleMap = new Map<string, { category: string; is_business: boolean | null }>(
+    (rulesData || []).map((r) => [r.vendor_normalized as string, { category: r.category as string, is_business: r.is_business as boolean | null }]),
+  );
+
   const toInsert: Record<string, unknown>[] = [];
   let skipped = 0;
+  let rulesApplied = 0;
   for (const t of transactions) {
     const key = `${t.txn_date}|${Number(t.amount).toFixed(2)}|${t.vendor.toLowerCase().trim()}`;
     if (existingKeys.has(key)) {
       skipped++;
       continue;
     }
+    const vendorNorm = t.vendor.toLowerCase().trim();
+    const rule = ruleMap.get(vendorNorm);
+    let category = t.category || null;
+    let is_business = t.is_business ?? false;
+    if (rule) {
+      // Rule wins for category UNLESS the caller explicitly passed a category
+      if (!t.category) category = rule.category;
+      if (t.is_business === undefined && rule.is_business !== null) is_business = rule.is_business;
+      rulesApplied++;
+    }
     toInsert.push({
       user_id: USER_ID,
       txn_date: t.txn_date,
       amount: t.amount,
       vendor: t.vendor,
-      category: t.category || null,
+      category,
       memo: t.memo || null,
-      is_business: t.is_business ?? false,
+      is_business,
       account_id: t.account_id ?? defaultAccount ?? null,
       source: t.source || defaultSource || 'bulk',
       needs_review: false,
@@ -76,11 +97,11 @@ export async function POST(req: NextRequest) {
   }
 
   if (toInsert.length === 0) {
-    return NextResponse.json({ ok: true, inserted: 0, skipped, message: 'all duplicates — nothing inserted' });
+    return NextResponse.json({ ok: true, inserted: 0, skipped, rules_applied: rulesApplied, message: 'all duplicates — nothing inserted' });
   }
   const { error, data } = await supabase.from('transactions').insert(toInsert).select('id');
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ ok: true, inserted: data?.length || 0, skipped });
+  return NextResponse.json({ ok: true, inserted: data?.length || 0, skipped, rules_applied: rulesApplied });
 }

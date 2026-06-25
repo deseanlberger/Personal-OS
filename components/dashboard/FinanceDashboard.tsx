@@ -289,31 +289,14 @@ export function FinanceDashboard({
           )}
         </div>
 
-        {/* Transfers to Make */}
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="mb-3 flex items-baseline justify-between">
-            <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Transfers to make</div>
-            <div className="text-[10px] text-white/30">{fmtMonthLong(shownBucket.month)}</div>
-          </div>
-          {shownBucket.income === 0 ? (
-            <p className="py-6 text-[12px] text-white/30">No income logged this month — log an income transaction (negative amount) to see transfer amounts.</p>
-          ) : (
-            <ul className="space-y-2">
-              <TransferRow label="Tax set-aside" pct={data.transfers.tax.pct} amount={data.transfers.tax.amount} tone="amber" />
-              <TransferRow label="Tithe / giving" pct={data.transfers.tithe.pct} amount={data.transfers.tithe.amount} tone="purple" />
-              <TransferRow label="Move to savings" pct={data.transfers.savings.pct} amount={data.transfers.savings.amount} tone="emerald" />
-              <li className="mt-2 border-t border-white/[0.06] pt-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
-                Total to transfer:
-                <span className="num ml-1 text-white/80">
-                  {fmtMoney(data.transfers.tax.amount + data.transfers.tithe.amount + data.transfers.savings.amount)}
-                </span>
-                <span className="ml-2 text-white/30 normal-case tracking-normal">
-                  ({(data.settings.tax_pct + data.settings.tithe_pct + data.settings.savings_pct).toFixed(0)}% of {fmtMoney(shownBucket.income, { compact: true })})
-                </span>
-              </li>
-            </ul>
-          )}
-        </div>
+        {/* Income card replaces Transfers to Make */}
+        <IncomeCard />
+      </div>
+
+      {/* Vendor leaderboard + Recurring calendar */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <VendorLeaderboard month={shownBucket.month} scope={scope} />
+        <RecurringCalendar month={shownBucket.month} />
       </div>
 
       {/* Month-over-month strip */}
@@ -684,5 +667,211 @@ function TransferRow({
       </div>
       <div className="num text-sm">{fmtMoney(amount)}</div>
     </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Income / vendor leaderboard / recurring bill calendar
+// ---------------------------------------------------------------------------
+
+type IncomeBucket = { personal: number; business: number; total: number };
+type IncomeResponse = {
+  rolling_30d: IncomeBucket;
+  this_month: IncomeBucket;
+  estimated_monthly: IncomeBucket;
+  sample_size: number;
+};
+
+function IncomeCard() {
+  const [data, setData] = useState<IncomeResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/finance/income', { cache: 'no-store' })
+      .then(async (r) => {
+        if (!r.ok) {
+          setErr(`${r.status}`);
+          return;
+        }
+        setData(await r.json());
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  if (err) {
+    return (
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-[12px] text-white/40">
+        Income unavailable ({err})
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-[12px] text-white/40">
+        Loading income…
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
+      <div className="mb-3 text-[10px] uppercase tracking-[0.18em] text-emerald-300/85">Income</div>
+      <ul className="space-y-2">
+        <IncomeRow label="Last 30 days" bucket={data.rolling_30d} />
+        <IncomeRow label="This month" bucket={data.this_month} />
+        <IncomeRow label="Est. monthly (12wk avg)" bucket={data.estimated_monthly} muted />
+      </ul>
+    </div>
+  );
+}
+
+function IncomeRow({ label, bucket, muted = false }: { label: string; bucket: IncomeBucket; muted?: boolean }) {
+  return (
+    <li className={`rounded-md border border-white/[0.06] bg-black/30 px-3 py-2 ${muted ? 'opacity-80' : ''}`}>
+      <div className="flex items-baseline justify-between">
+        <div className="text-[11px] uppercase tracking-[0.14em] text-white/55">{label}</div>
+        <div className="num text-sm text-emerald-300">{fmtMoney(bucket.total)}</div>
+      </div>
+      <div className="num mt-1 flex items-baseline gap-3 text-[10px] text-white/45">
+        <span><span className="text-white/30">personal</span> {fmtMoney(bucket.personal, { compact: true })}</span>
+        <span><span className="text-white/30">business</span> {fmtMoney(bucket.business, { compact: true })}</span>
+      </div>
+    </li>
+  );
+}
+
+type VendorRow = { vendor: string; amount: number; count: number; category: string | null; is_business: boolean };
+
+function VendorLeaderboard({ month, scope }: { month: string; scope: string }) {
+  const [data, setData] = useState<{ top: VendorRow[]; total: number; rest_count: number; rest_total: number } | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ month, scope });
+    fetch(`/api/finance/vendor-leaderboard?${params.toString()}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then(setData)
+      .catch(() => {});
+  }, [month, scope]);
+
+  if (!data) {
+    return <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-[12px] text-white/40">Loading vendors…</div>;
+  }
+  if (data.top.length === 0) {
+    return null;
+  }
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Top vendors</div>
+        <div className="text-[10px] text-white/30">{fmtMonthLong(month)}</div>
+      </div>
+      <ul className="space-y-0.5">
+        {data.top.map((v, i) => {
+          const pct = (v.amount / Math.max(data.total, 1)) * 100;
+          return (
+            <li key={v.vendor + i} className="relative flex items-baseline justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-white/[0.03]">
+              <div
+                className="absolute left-0 top-0 h-full rounded-md bg-emerald-400/[0.06]"
+                style={{ width: `${Math.min(pct, 100)}%` }}
+              />
+              <div className="relative min-w-0 flex-1 text-[12px] text-white/85">
+                <span className="num mr-2 text-white/30">{String(i + 1).padStart(2, '0')}</span>
+                <span className="truncate">{v.vendor}</span>
+                {v.is_business && <span className="ml-1.5 text-[9px] uppercase tracking-[0.18em] text-emerald-300/70">biz</span>}
+              </div>
+              <div className="relative num shrink-0 text-sm text-white/90">{fmtMoney(v.amount)}</div>
+              <div className="relative num shrink-0 text-[10px] text-white/30">×{v.count}</div>
+            </li>
+          );
+        })}
+      </ul>
+      {data.rest_count > 0 && (
+        <div className="mt-2 border-t border-white/[0.04] pt-2 text-[10px] uppercase tracking-[0.18em] text-white/35">
+          +{data.rest_count} more vendors · {fmtMoney(data.rest_total)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type RecurringItem = {
+  vendor: string;
+  expected_day: number;
+  expected_amount: number;
+  is_business: boolean;
+  category: string | null;
+  confirmed: boolean;
+  months_seen: number;
+};
+
+function RecurringCalendar({ month }: { month: string }) {
+  const [data, setData] = useState<{ items: RecurringItem[]; total: number } | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/finance/recurring-calendar?month=${month}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then(setData)
+      .catch(() => {});
+  }, [month]);
+
+  if (!data) {
+    return <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-[12px] text-white/40">Loading recurring…</div>;
+  }
+  if (data.items.length === 0) return null;
+
+  // Group by day for collision detection
+  const byDay = new Map<number, RecurringItem[]>();
+  for (const it of data.items) {
+    if (!byDay.has(it.expected_day)) byDay.set(it.expected_day, []);
+    byDay.get(it.expected_day)!.push(it);
+  }
+
+  const daysInMonth = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+  const heaviestDay = Math.max(1, ...Array.from(byDay.values()).map((arr) => arr.reduce((s, i) => s + i.expected_amount, 0)));
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Recurring bills</div>
+        <div className="text-[10px] text-white/30">{fmtMoney(data.total)} / mo</div>
+      </div>
+
+      {/* Compact mini-calendar with bill density per day */}
+      <div className="grid grid-cols-7 gap-0.5 sm:grid-cols-10">
+        {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
+          const items = byDay.get(day) || [];
+          const dayTotal = items.reduce((s, i) => s + i.expected_amount, 0);
+          const intensity = dayTotal / heaviestDay;
+          return (
+            <div
+              key={day}
+              title={items.length ? items.map((i) => `${i.vendor}: ${fmtMoney(i.expected_amount)}`).join('\n') : `Day ${day}: clear`}
+              className="relative flex h-9 items-center justify-center rounded text-[10px]"
+              style={{ background: items.length ? `rgba(245, 158, 11, ${0.10 + intensity * 0.45})` : 'rgba(255,255,255,0.02)' }}
+            >
+              <span className={items.length ? 'text-amber-100/85 num' : 'num text-white/30'}>{day}</span>
+              {items.length > 1 && (
+                <span className="absolute right-0.5 top-0.5 num text-[9px] text-amber-300/85">{items.length}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* List view */}
+      <ul className="mt-3 space-y-1 text-[11px]">
+        {data.items.slice(0, 10).map((it) => (
+          <li key={it.vendor} className="flex items-baseline gap-2 rounded-md border border-white/[0.04] bg-black/30 px-2 py-1.5">
+            <span className="num shrink-0 text-white/35">{String(it.expected_day).padStart(2, '0')}</span>
+            <span className="min-w-0 flex-1 truncate text-white/85">{it.vendor}</span>
+            {it.confirmed && <span className="shrink-0 text-[9px] uppercase tracking-[0.18em] text-emerald-300/70">✓</span>}
+            {it.is_business && <span className="shrink-0 text-[9px] uppercase tracking-[0.18em] text-emerald-300/70">biz</span>}
+            <span className="num shrink-0 text-white/70">{fmtMoney(it.expected_amount)}</span>
+          </li>
+        ))}
+        {data.items.length > 10 && (
+          <li className="text-[10px] uppercase tracking-[0.18em] text-white/30">+ {data.items.length - 10} more</li>
+        )}
+      </ul>
+    </div>
   );
 }
