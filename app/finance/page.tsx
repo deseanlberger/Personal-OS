@@ -267,9 +267,11 @@ export default function FinancePage() {
     <Shell>
       <div className="mx-auto max-w-5xl space-y-6">
         <header className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
-            Finance
-          </h1>
+          <div className="flex items-baseline gap-3">
+            <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">Finance</h1>
+            <a href="/finance/subscriptions" className="text-[10px] uppercase tracking-[0.18em] text-white/40 hover:text-white/70">Subscriptions</a>
+            <a href="/finance/net-worth" className="text-[10px] uppercase tracking-[0.18em] text-white/40 hover:text-white/70">Net worth</a>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => statementInputRef.current?.click()}
