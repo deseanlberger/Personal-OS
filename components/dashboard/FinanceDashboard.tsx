@@ -208,6 +208,8 @@ export function FinanceDashboard({
 
   return (
     <section className="space-y-5">
+      <AnomaliesStrip />
+
       {/* Month tab strip */}
       <div className="-mx-2 flex items-center gap-0.5 overflow-x-auto px-2 pb-1">
         {monthsForTabs.map((m) => {
@@ -298,6 +300,8 @@ export function FinanceDashboard({
         <VendorLeaderboard month={shownBucket.month} scope={scope} />
         <RecurringCalendar month={shownBucket.month} />
       </div>
+
+      <CashFlowChart />
 
       {/* Month-over-month strip */}
       {data.totals_by_month.length > 1 && (
@@ -872,6 +876,139 @@ function RecurringCalendar({ month }: { month: string }) {
           <li className="text-[10px] uppercase tracking-[0.18em] text-white/30">+ {data.items.length - 10} more</li>
         )}
       </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Anomalies strip + Cash flow forecast
+// ---------------------------------------------------------------------------
+
+type AnomalyResponse = {
+  category_alerts: { category: string; this_week: number; weekly_avg: number; ratio: number }[];
+  vendor_alerts: { vendor: string; amount: number; avg: number; ratio: number; date: string }[];
+};
+
+function AnomaliesStrip() {
+  const [data, setData] = useState<AnomalyResponse | null>(null);
+  useEffect(() => {
+    fetch('/api/finance/anomalies?threshold=2', { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then(setData)
+      .catch(() => {});
+  }, []);
+  if (!data) return null;
+  if (data.category_alerts.length === 0 && data.vendor_alerts.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3">
+      <div className="mb-2 text-[10px] uppercase tracking-[0.18em] text-amber-300/85">
+        ⚠ Anomalies this week
+      </div>
+      <ul className="space-y-1">
+        {data.category_alerts.slice(0, 4).map((a) => (
+          <li key={'c' + a.category} className="flex items-baseline justify-between gap-2 text-[11px]">
+            <span className="text-white/85">
+              <span className="text-amber-300">{a.category}</span>{' '}
+              spending is <span className="num text-amber-300">{a.ratio}×</span> typical
+            </span>
+            <span className="num shrink-0 text-white/55">{fmtMoney(a.this_week)} vs {fmtMoney(a.weekly_avg)}/wk avg</span>
+          </li>
+        ))}
+        {data.vendor_alerts.slice(0, 3).map((a) => (
+          <li key={'v' + a.vendor + a.date} className="flex items-baseline justify-between gap-2 text-[11px]">
+            <span className="text-white/85">
+              <span className="text-amber-300">{a.vendor}</span>{' '}
+              charge {a.date.slice(5)} was <span className="num text-amber-300">{a.ratio}×</span> their usual
+            </span>
+            <span className="num shrink-0 text-white/55">{fmtMoney(a.amount)} vs {fmtMoney(a.avg)} avg</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+type CashFlowResponse = {
+  starting_balance: number;
+  ending_balance: number;
+  daily_baseline: number;
+  recurring_total_30d: number;
+  recurring_count: number;
+  series: { date: string; projected_balance: number; recurring_charges: { vendor: string; amount: number }[]; baseline_drag: number }[];
+};
+
+function CashFlowChart() {
+  const [startBal, setStartBal] = useState<string>('');
+  const [data, setData] = useState<CashFlowResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const sb = Number(startBal) || 0;
+    fetch(`/api/finance/cash-flow?starting_balance=${sb}`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`${r.status}`)))
+      .then(setData)
+      .catch((e) => setErr((e as Error).message));
+  }, [startBal]);
+
+  if (err) return null;
+  if (!data) {
+    return <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-[12px] text-white/40">Loading forecast…</div>;
+  }
+  if (data.series.length === 0) return null;
+
+  const max = Math.max(...data.series.map((s) => s.projected_balance), Number(startBal) || 0);
+  const min = Math.min(...data.series.map((s) => s.projected_balance), 0);
+  const range = Math.max(max - min, 1);
+  const w = 720;
+  const h = 200;
+  const pad = 28;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+  const stepX = innerW / Math.max(data.series.length - 1, 1);
+
+  const points = data.series.map((s, i) => {
+    const x = pad + i * stepX;
+    const y = pad + innerH - ((s.projected_balance - min) / range) * innerH;
+    return `${x},${y}`;
+  }).join(' ');
+
+  // Mark days with recurring charges
+  const bills = data.series.map((s, i) => ({ i, total: s.recurring_charges.reduce((a, c) => a + c.amount, 0), date: s.date, charges: s.recurring_charges })).filter((b) => b.total > 0);
+
+  const zeroY = pad + innerH - ((0 - min) / range) * innerH;
+  const dippedNegative = data.series.some((s) => s.projected_balance < 0);
+
+  return (
+    <div className={`rounded-xl border p-4 ${dippedNegative ? 'border-red-400/30 bg-red-400/[0.04]' : 'border-white/[0.06] bg-white/[0.02]'}`}>
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Cash flow forecast · next 30d</div>
+          <div className="mt-0.5 text-[10px] text-white/30">{fmtMoney(data.daily_baseline)}/day baseline · {data.recurring_count} recurring · {fmtMoney(data.recurring_total_30d)} bills</div>
+        </div>
+        <label className="flex items-center gap-1 text-[10px] text-white/40">
+          Starting balance
+          <input type="number" step="0.01" value={startBal} onChange={(e) => setStartBal(e.target.value)} placeholder="0" className="num w-24 rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-white/85 outline-none" />
+        </label>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full">
+        {/* Zero line */}
+        <line x1={pad} y1={zeroY} x2={w - pad} y2={zeroY} stroke="#ef444466" strokeDasharray="2 2" />
+        <polyline points={points} fill="none" stroke={dippedNegative ? '#ef4444' : '#10b981'} strokeWidth="2" />
+        {bills.map((b) => {
+          const x = pad + b.i * stepX;
+          const y = pad + innerH - ((data.series[b.i].projected_balance - min) / range) * innerH;
+          return (
+            <g key={b.i}>
+              <circle cx={x} cy={y} r="3" fill="#f59e0b">
+                <title>{b.date}: {b.charges.map((c) => `${c.vendor} $${c.amount.toFixed(2)}`).join(', ')}</title>
+              </circle>
+            </g>
+          );
+        })}
+        <text x={pad} y={pad - 8} fontSize="10" fill="#6b7280" className="num">{fmtMoney(max, { compact: true })}</text>
+        <text x={pad} y={h - 6} fontSize="10" fill="#6b7280" className="num">{fmtMoney(min, { compact: true })}</text>
+        <text x={w - pad} y={h - 6} fontSize="10" fill="#6b7280" textAnchor="end" className="num">in 30d → {fmtMoney(data.ending_balance, { compact: true })}</text>
+      </svg>
     </div>
   );
 }

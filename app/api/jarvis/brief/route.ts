@@ -89,6 +89,43 @@ export async function GET() {
     .eq('user_id', USER_ID)
     .eq('needs_review', true);
 
+  // Finance anomalies — categories spending >2x weekly avg
+  let topAnomaly: { category: string; ratio: number } | null = null;
+  try {
+    const cutoff7 = new Date(now);
+    cutoff7.setDate(cutoff7.getDate() - 7);
+    const cutoff35 = new Date(now);
+    cutoff35.setDate(cutoff35.getDate() - 35);
+    const { data: anomalyTxns } = await supabase
+      .from('transactions')
+      .select('txn_date, amount, category')
+      .eq('user_id', USER_ID)
+      .eq('needs_review', false)
+      .gt('amount', 0)
+      .gte('txn_date', cutoff35.toISOString().slice(0, 10));
+    if (anomalyTxns) {
+      const thisW = new Map<string, number>();
+      const prior = new Map<string, number>();
+      const cut7 = cutoff7.toISOString().slice(0, 10);
+      for (const t of anomalyTxns) {
+        const cat = t.category || 'uncategorized';
+        const amt = Number(t.amount);
+        if (t.txn_date >= cut7) thisW.set(cat, (thisW.get(cat) || 0) + amt);
+        else prior.set(cat, (prior.get(cat) || 0) + amt);
+      }
+      let best: { category: string; ratio: number } | null = null;
+      for (const [cat, tw] of thisW) {
+        const avg = (prior.get(cat) || 0) / 4;
+        if (avg < 10 || tw < 25) continue;
+        const ratio = tw / avg;
+        if (ratio >= 2 && (!best || ratio > best.ratio)) best = { category: cat, ratio: Math.round(ratio * 10) / 10 };
+      }
+      topAnomaly = best;
+    }
+  } catch {
+    // best-effort
+  }
+
   // Workout context — last bench top-set, last run, did we train today
   const { data: todayWorkouts } = await supabase
     .from('workout_sessions')
@@ -117,6 +154,7 @@ export async function GET() {
       ? `Habits today: ${Object.entries(habitEntries).map(([k, v]) => `${k}=${v}`).join(', ')}`
       : null,
     pendingCount && pendingCount > 0 ? `${pendingCount} receipts awaiting review` : null,
+    topAnomaly ? `${topAnomaly.category} spend is ${topAnomaly.ratio}x weekly avg` : null,
     didStrengthToday ? 'Already trained today (strength)' : null,
     didRunToday ? 'Already ran today' : null,
     lastBench && lastBench[0]
