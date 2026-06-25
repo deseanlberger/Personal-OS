@@ -26,6 +26,7 @@ type Transaction = {
   subscription_status?: 'cancelled' | 'could_cancel' | null;
   source: string;
   receipt_image_url: string | null;
+  receipt_drive_url?: string | null;
   needs_review?: boolean;
 };
 
@@ -437,6 +438,18 @@ export default function FinancePage() {
                     </div>
                   </div>
                   <div className="num shrink-0 text-sm text-white/90">${Number(t.amount).toFixed(2)}</div>
+                  {t.receipt_drive_url && (
+                    <a
+                      href={t.receipt_drive_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="shrink-0 rounded border border-sky-400/30 bg-sky-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-sky-300 hover:bg-sky-400/20"
+                      title="Open receipt in Google Drive"
+                    >
+                      📎 Drive
+                    </a>
+                  )}
                   <select
                     value={t.subscription_status || ''}
                     onChange={async (e) => {
