@@ -385,6 +385,7 @@ export function FinanceDashboard({
       <SavingsTracker tracker={data.savings_tracker} />
       <BudgetSection budgets={data.budgets} />
       {(scope === 'business' || scope === 'all') && <MileageCard />}
+      <SavingsRecsSection />
       <InsightsSection />
     </section>
   );
@@ -505,6 +506,7 @@ function SavingsTracker({ tracker }: { tracker: Summary['savings_tracker'] }) {
 
 function BudgetSection({ budgets }: { budgets: BudgetRow[] }) {
   const [adding, setAdding] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
   const [cat, setCat] = useState('food');
   const [amount, setAmount] = useState('');
   const [pending, setPending] = useState(false);
@@ -535,13 +537,23 @@ function BudgetSection({ budgets }: { budgets: BudgetRow[] }) {
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
       <div className="mb-3 flex items-baseline justify-between">
         <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Budgets</div>
-        <button
-          onClick={() => setAdding((v) => !v)}
-          className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/70 hover:text-emerald-300"
-        >
-          {adding ? 'cancel' : '+ add'}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSuggesting(true)}
+            className="text-[10px] uppercase tracking-[0.18em] text-sky-300/70 hover:text-sky-300"
+            title="Suggest budgets from the last 30 days of actual spending"
+          >
+            ✨ from last 30d
+          </button>
+          <button
+            onClick={() => setAdding((v) => !v)}
+            className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/70 hover:text-emerald-300"
+          >
+            {adding ? 'cancel' : '+ add'}
+          </button>
+        </div>
       </div>
+      {suggesting && <SuggestBudgetsModal onClose={() => setSuggesting(false)} />}
       {adding && (
         <form onSubmit={submit} className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
           <select value={cat} onChange={(e) => setCat(e.target.value)} className="rounded-md border border-white/10 bg-black/40 px-2 py-1.5 text-sm text-white/85 outline-none">
@@ -648,6 +660,258 @@ function InsightsSection() {
         {items.map((s, i) => (
           <li key={i} className="text-[13px] leading-relaxed text-white/85">
             · {s}
+          </li>
+        ))}
+      </ul>
+      {generatedAt && (
+        <div className="mt-3 text-[10px] uppercase tracking-[0.18em] text-white/30">
+          Updated {new Date(generatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Suggestion = {
+  category: string;
+  last_30d: number;
+  suggested: number;
+  biz_share_pct: number;
+  existing: number | null;
+  count: number;
+};
+
+function SuggestBudgetsModal({ onClose }: { onClose: () => void }) {
+  const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/finance/budgets/suggest', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
+      .then((body) => {
+        const items: Suggestion[] = body.suggestions || [];
+        setSuggestions(items);
+        // Pre-pick categories that don't already have a budget set
+        setPicked(new Set(items.filter((s) => s.existing === null).map((s) => s.category)));
+      })
+      .catch((e) => setErr((e as Error).message));
+  }, []);
+
+  const toggle = (c: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(c)) next.delete(c);
+      else next.add(c);
+      return next;
+    });
+
+  const apply = async () => {
+    if (picked.size === 0 || applying) return;
+    setApplying(true);
+    const res = await fetch('/api/finance/budgets/suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categories: Array.from(picked) }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setErr(body.error || `apply failed (${res.status})`);
+      setApplying(false);
+      return;
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-3 sm:items-center" onClick={onClose}>
+      <div
+        className="w-full max-w-2xl rounded-xl border border-white/10 bg-[#0a0a0a] p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-baseline justify-between">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-sky-300/85">Build budget from last 30d</div>
+            <div className="mt-0.5 text-[11px] text-white/40">Actual spend + 10% cushion, rounded up to the nearest $5.</div>
+          </div>
+          <button onClick={onClose} className="text-white/40 hover:text-white/80">✕</button>
+        </div>
+
+        {err && <div className="mt-3 rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-[12px] text-red-300">{err}</div>}
+
+        {!suggestions && !err && (
+          <div className="mt-6 text-center text-[12px] text-white/40">Crunching last 30 days…</div>
+        )}
+
+        {suggestions && suggestions.length === 0 && (
+          <div className="mt-6 text-center text-[12px] text-white/40">
+            No category spent over $10 in the last 30 days yet. Log a few more transactions and try again.
+          </div>
+        )}
+
+        {suggestions && suggestions.length > 0 && (
+          <>
+            <ul className="mt-4 max-h-[60vh] space-y-1 overflow-y-auto">
+              {suggestions.map((s) => {
+                const isPicked = picked.has(s.category);
+                const tone =
+                  s.existing !== null && s.existing !== s.suggested
+                    ? 'border-amber-400/30 bg-amber-400/[0.04]'
+                    : isPicked
+                      ? 'border-emerald-400/30 bg-emerald-400/[0.06]'
+                      : 'border-white/[0.06] bg-white/[0.02]';
+                return (
+                  <li key={s.category}>
+                    <label className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 ${tone}`}>
+                      <input
+                        type="checkbox"
+                        checked={isPicked}
+                        onChange={() => toggle(s.category)}
+                        className="size-4 shrink-0 accent-emerald-400"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 text-sm text-white/85">
+                          <span className="truncate">{s.category}</span>
+                          {s.biz_share_pct > 0 && (
+                            <span className="shrink-0 rounded border border-emerald-400/30 bg-emerald-400/10 px-1 py-0 text-[9px] uppercase tracking-[0.18em] text-emerald-300">
+                              {s.biz_share_pct}% biz
+                            </span>
+                          )}
+                        </div>
+                        <div className="num mt-0.5 text-[10px] text-white/35">
+                          spent {fmtMoney(s.last_30d)} · {s.count} txn
+                          {s.existing !== null && (
+                            <span className="ml-2 text-amber-300/70">currently {fmtMoney(s.existing)}/mo</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="num text-sm text-white/85">{fmtMoney(s.suggested)}</div>
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-white/30">suggested /mo</div>
+                      </div>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
+              <div className="text-[11px] text-white/50">
+                <span className="num text-white/85">{picked.size}</span> of {suggestions.length} selected
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="rounded-md border border-white/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-white/60 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={apply}
+                  disabled={picked.size === 0 || applying}
+                  className="rounded-md border border-emerald-400/40 bg-emerald-400/15 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-emerald-300 hover:bg-emerald-400/25 disabled:opacity-40"
+                >
+                  {applying ? 'Applying…' : `Apply ${picked.size}`}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type Rec = {
+  title: string;
+  detail: string;
+  monthly_savings: number;
+  category: 'subscription' | 'category_cut' | 'vendor_switch' | 'other';
+  vendor: string | null;
+};
+
+function SavingsRecsSection() {
+  const [recs, setRecs] = useState<Rec[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const fetchRecs = useCallback(async (force = false) => {
+    setLoading(true);
+    setErr(null);
+    setNote(null);
+    try {
+      const res = await fetch(`/api/finance/savings-recs${force ? '?force=1' : ''}`, { cache: 'no-store' });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setRecs(body.recs || []);
+      setGeneratedAt(body.generated_at || null);
+      if (body.note) setNote(body.note);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRecs();
+  }, [fetchRecs]);
+
+  const totalMonthly = recs.reduce((s, r) => s + r.monthly_savings, 0);
+  const toneFor = (c: Rec['category']) =>
+    c === 'subscription'
+      ? 'border-amber-400/30 bg-amber-400/[0.06] text-amber-300'
+      : c === 'vendor_switch'
+        ? 'border-sky-400/30 bg-sky-400/[0.06] text-sky-300'
+        : c === 'category_cut'
+          ? 'border-purple-400/30 bg-purple-400/[0.06] text-purple-300'
+          : 'border-white/15 bg-white/[0.04] text-white/60';
+
+  return (
+    <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/85">Savings recs</div>
+        <div className="flex items-center gap-3">
+          {totalMonthly > 0 && (
+            <div className="num text-[11px] text-emerald-300/80">
+              up to {fmtMoney(totalMonthly)}/mo · {fmtMoney(totalMonthly * 12)}/yr
+            </div>
+          )}
+          <button
+            onClick={() => fetchRecs(true)}
+            disabled={loading}
+            className="text-[10px] uppercase tracking-[0.18em] text-emerald-300/70 hover:text-emerald-300 disabled:opacity-40"
+          >
+            {loading ? '…' : 'refresh'}
+          </button>
+        </div>
+      </div>
+      {err && <div className="text-[12px] text-red-300">{err}</div>}
+      {note && <div className="text-[12px] text-white/45">{note}</div>}
+      {!err && !note && recs.length === 0 && !loading && (
+        <div className="text-[12px] text-white/40">Nothing obvious to cut right now.</div>
+      )}
+      <ul className="space-y-2">
+        {recs.map((r, i) => (
+          <li key={i} className={`flex items-start gap-3 rounded-md border px-3 py-2 ${toneFor(r.category)}`}>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-sm text-white/90">{r.title}</span>
+                {r.vendor && (
+                  <span className="shrink-0 rounded border border-white/15 bg-black/30 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.18em] text-white/55">
+                    {r.vendor}
+                  </span>
+                )}
+              </div>
+              <div className="mt-0.5 text-[12px] leading-snug text-white/65">{r.detail}</div>
+            </div>
+            <div className="text-right">
+              <div className="num text-sm text-emerald-300">{fmtMoney(r.monthly_savings)}</div>
+              <div className="text-[10px] uppercase tracking-[0.14em] text-white/35">/ mo</div>
+            </div>
           </li>
         ))}
       </ul>

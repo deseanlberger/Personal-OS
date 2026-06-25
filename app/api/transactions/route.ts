@@ -54,6 +54,8 @@ export async function POST(req: NextRequest) {
       is_business: !!body.is_business,
       source,
       receipt_image_url: body.receipt_image_url || null,
+      receipt_drive_file_id: body.receipt_drive_file_id || null,
+      receipt_drive_url: body.receipt_drive_url || null,
       raw_parse: body.raw_parse || null,
       needs_review: needsReview,
     })
