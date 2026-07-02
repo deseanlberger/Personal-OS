@@ -180,7 +180,7 @@ export default function TodayPage() {
 
   return (
     <Shell>
-      <div className="mx-auto max-w-3xl space-y-5">
+      <div className="mx-auto max-w-6xl space-y-5">
         <header className="flex items-baseline justify-between">
           <div>
             <h1 className="font-mono text-xs uppercase tracking-[0.18em] text-white/40">
@@ -249,15 +249,23 @@ export default function TodayPage() {
         {/* C — Now + Next focus card */}
         {isToday && <NowNextCard currentBlock={currentBlock} nextBlock={nextBlock} nowMin={nowMin} onTaskClick={(id) => setTaskDrawerId(id)} onChanged={() => fetchBlocks(weekOffset)} />}
 
-        {/* A — Pure absolute timeline */}
-        <TimelineColumn
-          todayBlocks={todayBlocks}
-          now={now}
-          isToday={isToday}
-          weekOffset={weekOffset}
-          onChanged={() => fetchBlocks(weekOffset)}
-          onTaskClick={(id) => setTaskDrawerId(id)}
-        />
+        {/* A — Timeline + Unassigned tray side-by-side on desktop */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+          <TimelineColumn
+            todayBlocks={todayBlocks}
+            now={now}
+            isToday={isToday}
+            weekOffset={weekOffset}
+            onChanged={() => fetchBlocks(weekOffset)}
+            onTaskClick={(id) => setTaskDrawerId(id)}
+          />
+          <UnplacedTray
+            todayBlocks={todayBlocks}
+            isToday={isToday}
+            onChanged={() => fetchBlocks(weekOffset)}
+            onTaskClick={(id) => setTaskDrawerId(id)}
+          />
+        </div>
 
         {taskDrawerId && (
           <TaskDetailDrawer
@@ -877,5 +885,231 @@ function TaskDetailDrawer({
         )}
       </div>
     </div>
+  );
+}
+
+type Unplaced = {
+  id: string;
+  title: string;
+  urgency: 'today' | 'this_week' | 'this_month' | 'someday';
+  category: string | null;
+  energy: string | null;
+  estimated_minutes: number | null;
+  key: boolean;
+  reason: string;
+};
+
+const URGENCY_TONE: Record<string, string> = {
+  today: 'border-red-400/40 bg-red-400/10 text-red-300',
+  this_week: 'border-amber-400/40 bg-amber-400/10 text-amber-300',
+  this_month: 'border-sky-400/40 bg-sky-400/10 text-sky-300',
+  someday: 'border-white/15 bg-white/[0.04] text-white/50',
+};
+
+/**
+ * Return the block IDs that a task of the given category is eligible to be
+ * auto-slotted into, in priority order. Handles the "flex" block quirk: flex
+ * blocks accept deep-thinking OR deep-admin tasks.
+ */
+function eligibleBlocks(blocks: Block[], category: string | null): Block[] {
+  if (!category) return [];
+  return blocks.filter((b) => {
+    if (b.locked) return false;
+    if (b.type === 'coaching' || b.type === 'personal') return false;
+    if (b.type === 'flex') return category === 'deep-thinking' || category === 'deep-admin';
+    return b.type === category;
+  });
+}
+
+function assignableBlocks(blocks: Block[]): Block[] {
+  return blocks.filter((b) => !b.locked && b.type !== 'coaching' && b.type !== 'personal');
+}
+
+function UnplacedTray({
+  todayBlocks,
+  isToday,
+  onChanged,
+  onTaskClick,
+}: {
+  todayBlocks: Block[];
+  isToday: boolean;
+  onChanged: () => void | Promise<void>;
+  onTaskClick: (id: string) => void;
+}) {
+  const [items, setItems] = useState<Unplaced[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState(false);
+
+  const refetch = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tasks/unplaced', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`unplaced ${res.status}`);
+      const body = (await res.json()) as { unplaced: Unplaced[] };
+      setItems(body.unplaced || []);
+      setErr(null);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    refetch();
+    return onEvent(EVENTS.TASK_CHANGED, refetch);
+  }, [refetch]);
+
+  const assign = useCallback(
+    async (taskId: string, blockId: string) => {
+      setPending((prev) => new Set(prev).add(taskId));
+      try {
+        const res = await fetch(`/api/tasks/${taskId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assigned_block_id: blockId, assigned_week_offset: 0 }),
+        });
+        if (!res.ok) throw new Error(`assign ${res.status}`);
+        setItems((prev) => (prev ? prev.filter((t) => t.id !== taskId) : prev));
+        await onChanged();
+        emit(EVENTS.TASK_CHANGED);
+      } catch (e) {
+        setErr((e as Error).message);
+      } finally {
+        setPending((prev) => {
+          const next = new Set(prev);
+          next.delete(taskId);
+          return next;
+        });
+      }
+    },
+    [onChanged],
+  );
+
+  const autoSlot = useCallback(
+    (task: Unplaced) => {
+      const preferred = eligibleBlocks(todayBlocks, task.category);
+      const fallback = assignableBlocks(todayBlocks);
+      const target = preferred[0] || fallback[0];
+      if (!target) {
+        setErr(`No open blocks today for "${task.title}"`);
+        setTimeout(() => setErr(null), 3000);
+        return;
+      }
+      assign(task.id, target.id);
+    },
+    [todayBlocks, assign],
+  );
+
+  const slottable = useMemo(() => assignableBlocks(todayBlocks), [todayBlocks]);
+
+  return (
+    <aside className="lg:sticky lg:top-4 lg:self-start">
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02]">
+        <div className="flex items-center justify-between border-b border-white/[0.04] px-3 py-2">
+          <div className="flex items-baseline gap-2">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-white/50">Unassigned</div>
+            <div className="num text-[10px] text-white/35">{items?.length ?? '—'}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={refetch}
+              className="text-[10px] uppercase tracking-[0.18em] text-white/40 hover:text-white/70"
+              aria-label="Refresh"
+              title="Refresh"
+            >
+              ↻
+            </button>
+            <button
+              onClick={() => setCollapsed((v) => !v)}
+              className="text-[10px] uppercase tracking-[0.18em] text-white/40 hover:text-white/70 lg:hidden"
+            >
+              {collapsed ? 'show' : 'hide'}
+            </button>
+          </div>
+        </div>
+
+        {!collapsed && (
+          <div className="max-h-[70vh] space-y-1.5 overflow-y-auto p-2">
+            {err && (
+              <div className="rounded-md border border-red-400/30 bg-red-400/10 px-2 py-1.5 text-[11px] text-red-300">
+                {err}
+              </div>
+            )}
+            {items === null && (
+              <div className="px-2 py-4 text-center text-[11px] text-white/30">Loading…</div>
+            )}
+            {items !== null && items.length === 0 && (
+              <div className="px-2 py-6 text-center text-[11px] text-white/40">
+                All open tasks are slotted ✓
+              </div>
+            )}
+            {items?.map((t) => {
+              const catTone = t.category ? TYPE_TONE[t.category] || 'border-white/10 bg-white/[0.03]' : 'border-white/10 bg-white/[0.03]';
+              const preferred = eligibleBlocks(todayBlocks, t.category);
+              const canAuto = isToday && (preferred.length > 0 || slottable.length > 0);
+              const isBusy = pending.has(t.id);
+              return (
+                <div key={t.id} className={`rounded-md border p-2 ${catTone}`}>
+                  <div className="flex items-baseline gap-2">
+                    {t.key && <span className="shrink-0 text-amber-300">★</span>}
+                    <button
+                      onClick={() => onTaskClick(t.id)}
+                      className="min-w-0 flex-1 truncate text-left text-[13px] text-white/90 hover:text-white"
+                    >
+                      {t.title}
+                    </button>
+                    {t.estimated_minutes && (
+                      <span className="num shrink-0 text-[10px] text-white/40">{t.estimated_minutes}m</span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className={`rounded border px-1.5 py-0 text-[9px] uppercase tracking-[0.14em] ${URGENCY_TONE[t.urgency]}`}>
+                      {t.urgency.replace('_', ' ')}
+                    </span>
+                    <span className="rounded border border-white/15 bg-black/30 px-1.5 py-0 text-[9px] uppercase tracking-[0.14em] text-white/55">
+                      {t.category || 'no cat'}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[10px] leading-snug text-white/40">{t.reason}</div>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <button
+                      onClick={() => autoSlot(t)}
+                      disabled={!canAuto || isBusy}
+                      className="rounded-md border border-emerald-400/40 bg-emerald-400/[0.08] px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-emerald-300 hover:bg-emerald-400/[0.16] disabled:cursor-not-allowed disabled:opacity-30"
+                      title={
+                        !isToday
+                          ? 'Switch to Today to auto-slot'
+                          : preferred.length > 0
+                            ? `→ ${preferred[0].name} at ${to12h(preferred[0].start)}`
+                            : slottable.length > 0
+                              ? `→ ${slottable[0].name} (no category match)`
+                              : 'No open blocks today'
+                      }
+                    >
+                      → Auto
+                    </button>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        if (!e.target.value) return;
+                        assign(t.id, e.target.value);
+                      }}
+                      disabled={slottable.length === 0 || isBusy}
+                      className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/40 px-1.5 py-1 text-[10px] text-white/70 outline-none disabled:opacity-30"
+                    >
+                      <option value="">Assign to…</option>
+                      {slottable.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {to12h(b.start)} · {b.name} ({TYPE_LABEL[b.type] || b.type})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
